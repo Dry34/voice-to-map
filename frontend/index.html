@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voice-to-Map</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="layout">
+    <div id="map" class="map"></div>
+
+    <aside class="panel">
+      <header class="panel-head">
+        <h1>Voice-to-Map</h1>
+        <div class="status">
+          <span id="conn" class="dot off" title="Connexion"></span>
+          <span id="conn-label">Déconnecté</span>
+          <span class="sep">·</span>
+          <span id="node">—</span>
+        </div>
+      </header>
+
+      <form id="report-form" class="report">
+        <label for="unit">Unité</label>
+        <input id="unit" name="unit" value="ALPHA 2" autocomplete="off">
+        <label for="text">Annonce</label>
+        <textarea id="text" name="text" rows="2" placeholder="I am south of the church." required></textarea>
+        <button type="submit" id="send">Envoyer</button>
+        <p id="form-msg" class="msg" role="status"></p>
+      </form>
+
+      <div class="samples">
+        <span class="label">Exemples</span>
+        <button type="button" class="sample">I am at Notre-Dame.</button>
+        <button type="button" class="sample">I am south of the church.</button>
+        <button type="button" class="sample">I moved towards rue de Rivoli.</button>
+        <button type="button" class="sample">Moving north along rue Saint-Denis, about 200 meters.</button>
+      </div>
+
+      <div class="history-head">
+        <h2>Historique</h2>
+        <button type="button" id="verify">Vérifier l'intégrité</button>
+      </div>
+      <p id="integrity" class="msg" role="status"></p>
+      <ol id="events" class="events"></ol>
+    </aside>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
