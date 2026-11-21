@@ -28,12 +28,16 @@ def _simplify(points: list[Point]) -> list[Point]:
     return [points[int(i * step)] for i in range(MAX_POINTS - 1)] + [points[-1]]
 
 
-async def foot_route(a: Point, b: Point) -> list[Point] | None:
-    """Points [(lat, lon)…] du trajet à pied de a à b, ou None (trop court, trop long, service muet)."""
+async def foot_route(a: Point, b: Point, snap_end: bool = False) -> list[Point] | None:
+    """Points [(lat, lon)…] du trajet à pied de a à b, ou None (trop court, trop long, service muet).
+
+    snap_end : l'arrivée est le point de rue le plus proche de b (pour un déplacement relatif,
+    « 200 m à 12h » : b tombe souvent au milieu d'un pâté de maisons).
+    """
     d = haversine(a, b)
     if d < MIN_DISTANCE_M or d > MAX_DISTANCE_M:
         return None
-    key = f"{a[0]:.5f},{a[1]:.5f}>{b[0]:.5f},{b[1]:.5f}"
+    key = f"{a[0]:.5f},{a[1]:.5f}>{b[0]:.5f},{b[1]:.5f}:{int(snap_end)}"
     if key in _cache:
         return _cache[key]
     url = ROUTE_URL.format(a=f"{a[1]:.6f},{a[0]:.6f}", b=f"{b[1]:.6f},{b[0]:.6f}")
@@ -47,7 +51,7 @@ async def foot_route(a: Point, b: Point) -> list[Point] | None:
         return None
     pts = [(round(c[1], 6), round(c[0], 6)) for c in coords]
     # OSRM part de la rue la plus proche : on raccroche le vrai départ et la vraie arrivée.
-    route = _simplify([a, *pts, b]) if len(pts) >= 2 else None
+    route = _simplify([a, *pts] if snap_end else [a, *pts, b]) if len(pts) >= 2 else None
     _cache[key] = route
     return route
 

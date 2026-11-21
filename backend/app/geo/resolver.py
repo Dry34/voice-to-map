@@ -8,7 +8,7 @@ import re
 
 from ..config import settings
 from . import osm
-from .geometry import BEARINGS, DIRECTION_BEARINGS, Point, closest_pair, destination, nearest
+from .geometry import BEARINGS, DIRECTION_BEARINGS, Point, closest_pair, destination, haversine, nearest
 
 # Rayon d'incertitude par relation, en mètres (voir le tableau du plan).
 UNCERTAINTY_M = {"at": 30, "near": 150, "north_of": 80, "south_of": 80, "east_of": 80,
@@ -17,6 +17,8 @@ CARDINAL_OFFSET_M = 120
 NAMED_PLACE_RADIUS_M = 10_000   # Paris intra-muros et proche banlieue
 REGION_RADIUS_M = 60_000        # Île-de-France (Disneyland, Versailles…)
 DEFAULT_ALONG_M = 100
+STREET_TYPES = {"rue", "avenue", "av", "boulevard", "bd", "place", "quai", "impasse", "passage", "allée", "allee",
+                "cours", "square", "chemin", "route", "villa", "cité", "cite", "street", "road"}
 FAMOUS_IMPORTANCE = 0.45        # notoriété Nominatim au-delà de laquelle un lieu est « connu de tous »
 
 
@@ -81,6 +83,15 @@ async def locate_landmark(landmark: dict, ref: Point) -> tuple[Point, str, str |
         if famous and famous.get("importance", 0) >= FAMOUS_IMPORTANCE:
             return (famous["lat"], famous["lon"]), famous["name"], famous["osm_id"]
         street = await osm.find_street(name, ref, radius)
+        if not street:
+            # Nom mal transcrit (« rue de Chabon » pour rue Chapon) : voies au nom proche, la plus près de l'unité.
+            core = " ".join(t for t in re.split(r"[\s'-]+", name)
+                            if t and t.lower() not in STREET_TYPES and t.lower() not in ("de", "du", "des", "d", "la", "le", "les", "l"))
+            cands = [c for c in await osm.photon(core or name, ref, NAMED_PLACE_RADIUS_M, "highway")
+                     if osm.name_matches(core or name, c["name"])] if core else []
+            if cands:
+                best = min(cands, key=lambda c: haversine(ref, (c["lat"], c["lon"])))
+                street = await osm.find_street(best["name"], ref, radius) or (best["name"], [[(best["lat"], best["lon"])]])
         if street:
             label, lines = street
             return nearest(ref, [p for line in lines for p in line]), label, None

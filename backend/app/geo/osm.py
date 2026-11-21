@@ -300,7 +300,12 @@ async def nominatim_street(name: str, ref: Point, radius_m: float) -> tuple[str,
     for res in results:
         if res.get("class") != "highway":
             continue
-        label = res.get("name") or res.get("display_name", name).split(",")[0]
+        candidate = res.get("name") or res.get("display_name", name).split(",")[0]
+        # La rue renvoyée doit porter le nom demandé : « rue faubourg Saint-Antoine » ne doit pas
+        # donner « rue du Grand Prieuré » parce que c'est la seule voie trouvée dans la zone.
+        if not name_matches(name, candidate):
+            continue
+        label = candidate
         geo = res.get("geojson") or {}
         coords = geo.get("coordinates") or []
         raw = coords if geo.get("type") == "MultiLineString" else [coords] if geo.get("type") == "LineString" else []
