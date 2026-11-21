@@ -127,3 +127,11 @@ export async function leaveGroup(identity) {
 export async function confirmReport(identity, seq) {
   return postJson("/api/reports/confirm", { ...(await signWith(identity, "confirm", String(seq))), seq });
 }
+
+export async function raiseAlert(identity) {
+  return postJson("/api/alerts", await signWith(identity, "sos", ""));
+}
+
+export async function clearAlert(identity) {
+  return postJson("/api/alerts/clear", await signWith(identity, "sos_clear", ""));
+}

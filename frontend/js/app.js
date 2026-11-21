@@ -6,7 +6,7 @@
 
 import * as identity from "./identity.js";
 import { currentLang, onLangChange, setupPrefs } from "./prefs.js";
-import { applyEvent, flyTo, initMap, setKillHandler, setOwnUnit, setUnitColors, squadBox, unitColor } from "./map.js";
+import { applyEvent, flyTo, flyToPoint, initMap, setKillHandler, setOwnUnit, setUnitColors, squadBox, unitColor, unitPosition } from "./map.js";
 import { setupPushToTalk } from "./ptt.js";
 import { connect } from "./socket.js";
 
@@ -45,10 +45,13 @@ const DICT = {
     en: "Clears the history on this screen only (the map and other screens are unchanged)",
   },
   "verify": { fr: "Vérifier l'intégrité", en: "Check integrity" },
+  "sos": { fr: "Demander du renfort", en: "Request backup" },
+  "sos.clear": { fr: "Situation sécurisée", en: "Situation secured" },
   "conn": { fr: "Connexion", en: "Connection" },
 };
 const allEvents = []; // pour reconstruire l'historique quand on change de langue
 const confirmedSeqs = new Set(); // annonces « à confirmer » qui ont été confirmées depuis
+const activeAlerts = new Map(); // unité -> événement d'alerte en cours
 const seen = new Set();
 let me = null; // identité de cet onglet : {unit, privateKey, publicKey}
 let announcePresence = () => {}; // branché sur le WebSocket dans main()
@@ -81,6 +84,8 @@ let lastSeq = 0;
 function addToHistory(ev) {
   lastSeq = Math.max(lastSeq, ev.seq || 0);
   if (ev.intent?.sim) return; // étapes de la simulation : pas dans l'historique
+  // Coéquipiers déplacés avec l'auteur (escouade, « moi et Tom ») : une seule ligne, celle de l'auteur.
+  if (ev.intent?.moved_by) return;
   if ((ev.seq || 0) <= hiddenUntil) return; // effacé localement
   if (ev.status === "cleared") $("events").replaceChildren(); // remise à zéro : l'historique repart de zéro
   // Groupe d'ennemis (« 5 ennemis à… ») : une seule ligne dans l'historique, pour le premier.
@@ -92,11 +97,26 @@ function addToHistory(ev) {
   li.className = "event";
   li.style.setProperty("--unit-color", unitColor(ev.unit));
   li.innerHTML = `
-    <div class="meta"><span>${fmtTime(ev.ts)}</span><span>${ev.unit}</span>
+    <div class="meta"><span>${fmtTime(ev.ts)}</span><span>${whoLabel(ev)}</span>
       <span class="badge ${ev.status}">${ev.status === "confirmed" ? tr("placé", "placed") : tr("à confirmer", "to confirm")}</span>
       ${ev.intent?.subject === "enemy" ? `<span class="badge enemy">${group ? `${group[0]}–${group[group.length - 1]} (${group.length})` : ev.intent.enemy_id || tr("ennemi", "hostile")}${!group && ev.intent.count ? ` ×${ev.intent.count}` : ""}</span>` : ""}</div>
     <div class="text"></div>
     <div class="res"></div>`;
+  if (ev.status === "alert" || ev.status === "alert_clear") {
+    const i = ev.intent || {};
+    const b = li.querySelector(".meta .badge");
+    b.className = ev.status === "alert" ? "badge alert" : "badge confirmed";
+    b.textContent = ev.status === "alert" ? tr("renfort demandé", "backup requested") : tr("sécurisé", "secured");
+    li.querySelector(".text").textContent = `« ${ev.transcript} »`;
+    const who = (i.recipients || []).map((r) => `${r.unit} (${r.distance_m} m)`).join(", ");
+    li.querySelector(".res").textContent = ev.status === "alert"
+      ? (who ? `${tr("prévenus", "notified")} : ${who}` : tr("aucune unité à moins de 1,5 km", "no unit within 1.5 km"))
+        + (i.reason ? ` · ${i.reason}` : "")
+      : tr("fin de l'alerte", "alert over");
+    if (ev.lat != null) li.onclick = () => flyToPoint(ev.lat, ev.lon);
+    $("events").appendChild(li);
+    return;
+  }
   if (ev.status === "cleared") {
     li.querySelector(".meta").innerHTML = `<span>${fmtTime(ev.ts)}</span><span class="badge left">${tr("carte remise à zéro", "map reset")}</span>`;
     li.querySelector(".text").remove();
@@ -172,6 +192,81 @@ function addToHistory(ev) {
   $("events").appendChild(li);
 }
 
+// --- Alerte de détresse -----------------------------------------------------
+
+let bannerFor = null;
+
+function beep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.25, 0.5].forEach((t) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.25, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.18);
+      o.connect(g).connect(ctx.destination);
+      o.start(ctx.currentTime + t);
+      o.stop(ctx.currentTime + t + 0.2);
+    });
+  } catch { /* son bloqué par le navigateur */ }
+  navigator.vibrate?.([300, 120, 300, 120, 300]);
+}
+
+function whereFromMe(ev) {
+  const mine = me && unitPosition(me.unit);
+  if (!mine) {
+    const r = (ev.intent?.recipients || []).find((x) => x.unit === me?.unit);
+    return r ? `${r.distance_m} m` : "";
+  }
+  const [la1, lo1] = mine;
+  const dy = (ev.lat - la1) * 111_320;
+  const dx = (ev.lon - lo1) * 111_320 * Math.cos((la1 * Math.PI) / 180);
+  const dist = Math.round(Math.hypot(dx, dy));
+  const deg = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+  const dirs = currentLang() === "en" ? ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"]
+    : ["nord", "nord-est", "est", "sud-est", "sud", "sud-ouest", "ouest", "nord-ouest"];
+  return tr(`à ${dist} m au ${dirs[Math.round(deg / 45) % 8]}`, `${dist} m to the ${dirs[Math.round(deg / 45) % 8]}`);
+}
+
+function showBanner(ev) {
+  bannerFor = ev.unit;
+  $("alert-title").textContent = tr(`${ev.unit} a besoin de vous`, `${ev.unit} needs you`);
+  $("alert-where").textContent = [whereFromMe(ev), ev.intent?.reason].filter(Boolean).join(" · ");
+  $("alert-go").textContent = tr("J'y vais", "On my way");
+  $("alert-see").textContent = tr("Voir sur la carte", "Show on map");
+  $("alert-close").textContent = tr("Fermer", "Dismiss");
+  $("alert-see").onclick = () => flyToPoint(ev.lat, ev.lon);
+  $("alert-close").onclick = hideBanner;
+  $("alert-go").onclick = async () => {
+    $("alert-go").disabled = true;
+    try { applyAll(await identity.sendText(me, tr(`Je vais vers ${ev.unit}.`, `I am heading to ${ev.unit}.`))); hideBanner(); }
+    catch (err) { $("alert-where").textContent = err.message; }
+    finally { $("alert-go").disabled = false; }
+  };
+  $("alert-banner").hidden = false;
+  beep();
+}
+
+function hideBanner() {
+  bannerFor = null;
+  $("alert-banner").hidden = true;
+}
+
+function renderSosButtons() {
+  const mine = me && activeAlerts.has(me.unit);
+  $("sos").hidden = !!mine;
+  $("sos-clear").hidden = !mine;
+}
+
+/** Auteur d'une ligne d'historique : l'unité, ou l'escouade quand elle s'est déplacée ensemble. */
+function whoLabel(ev) {
+  const i = ev.intent || {};
+  if (!i.squad_members) return ev.unit;
+  const head = i.squad ? `${tr("Escouade", "Squad")} ${i.squad}` : tr("Ensemble", "Together");
+  return `${head} · ${i.squad_members.join(", ")}`;
+}
+
 function markConfirmed(li) {
   const b = li.querySelector(".meta .badge");
   if (b) { b.className = "badge confirmed"; b.textContent = tr("confirmé", "confirmed"); }
@@ -184,6 +279,16 @@ function handle(ev, live) {
   if (seen.has(ev.id)) return;
   seen.add(ev.id);
   allEvents.push(ev);
+  if (ev.status === "cleared") activeAlerts.clear();
+  if (ev.status === "alert") {
+    activeAlerts.set(ev.unit, ev);
+    if (live && me && ev.unit !== me.unit && (ev.intent?.recipients || []).some((r) => r.unit === me.unit)) showBanner(ev);
+  }
+  if (ev.status === "alert_clear") {
+    activeAlerts.delete(ev.unit);
+    if (bannerFor === ev.unit) hideBanner();
+  }
+  if (["alert", "alert_clear", "cleared"].includes(ev.status)) renderSosButtons();
   const from = ev.intent?.confirmed_from;
   if (from) {
     confirmedSeqs.add(from);
@@ -204,6 +309,8 @@ function applyAll(ev) {
   all.forEach((e) => handle(e, true));
   return all.map((e) => {
     const i = e.intent || {};
+    if (e.status === "alert") return tr(`renfort demandé : ${(i.recipients || []).length} unité(s) prévenue(s)`, `backup requested: ${(i.recipients || []).length} unit(s) notified`);
+    if (e.status === "alert_clear") return tr("situation sécurisée", "situation secured");
     if (e.status === "facing") return `${e.unit} ${tr("regarde vers", "facing")} ${Math.round(i.heading_deg || 0)}°`;
     if (e.status === "group") return i.type === "group_join" ? `${tr("escouade", "squad")} ${i.group_id}: ${(i.members || []).join(", ")}` : `${tr("quitte", "left")} ${i.group_id}`;
     if (e.status === "enemy_down") return `${(i.kill_ids || [i.enemy_id]).join(", ")} ${tr(i.kill_ids ? "neutralisés" : "neutralisé", "neutralised")}`;
@@ -281,6 +388,7 @@ function render() {
   setOwnUnit(me?.unit || null);
   announcePresence();
   renderSquad();
+  renderSosButtons();
   // Seul un terminal qui tient une unité peut neutraliser (l'action est signée par sa clé).
   setKillHandler(me ? (id) => identity.killEnemy(me, id) : null);
   if (!me && !pc) refreshTaken();
@@ -425,6 +533,15 @@ async function main() {
     if (r.ok) showSim((await r.json()).on);
   };
   simListener = showSim;
+
+  $("sos").onclick = async () => {
+    if (!me || !confirm(tr("Envoyer une demande de renfort aux unités proches ?", "Send a backup request to nearby units?"))) return;
+    try { applyAll(await identity.raiseAlert(me)); }
+    catch (err) { $("form-msg").className = "msg err"; $("form-msg").textContent = err.message; }
+  };
+  $("sos-clear").onclick = async () => {
+    try { applyAll(await identity.clearAlert(me)); } catch (err) { $("form-msg").textContent = err.message; }
+  };
 
   $("clear-history").onclick = () => {
     hiddenUntil = lastSeq;

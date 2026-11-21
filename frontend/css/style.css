@@ -164,3 +164,30 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
   .map { height: 55vh; }
   .panel { border-left: 0; border-top: 1px solid var(--line); }
 }
+
+/* --- Alerte de détresse ------------------------------------------------------ */
+.sos { margin-top: 4px; background: transparent; color: #ff5c6c; border: 2px solid #ff5c6c; padding: 10px 8px; font-weight: 700; }
+.sos:hover { background: #ff5c6c; color: #fff; }
+.sos-clear { background: #2f7d50; color: #fff; border: 0; padding: 10px 8px; font-weight: 700; }
+.alert-banner { position: fixed; z-index: 1000; top: 64px; left: calc((100% - 380px) / 2); transform: translateX(-50%);
+  width: min(560px, calc(100% - 420px)); display: grid; gap: 10px; padding: 14px 16px; border-radius: 6px;
+  background: #d3263a; color: #fff; box-shadow: 0 8px 30px rgba(0, 0, 0, .45); animation: alert-in .25s ease-out; }
+.alert-text { display: grid; gap: 2px; }
+.alert-text strong { font: 700 1.35rem var(--display); }
+.alert-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.alert-actions button { background: rgba(255, 255, 255, .15); color: #fff; border: 1px solid rgba(255, 255, 255, .6); padding: 6px 12px; font-weight: 600; }
+.alert-actions .alert-go { background: #fff; color: #d3263a; border-color: #fff; }
+.alert-actions .alert-close { margin-left: auto; }
+@keyframes alert-in { from { transform: translate(-50%, -12px); opacity: 0; } }
+.sos-ring { pointer-events: none; }
+.sos-ring span { position: absolute; inset: 0; border-radius: 50%; border: 3px solid #ff2d45; animation: sos-pulse 1.4s ease-out infinite; }
+.sos-ring span:nth-child(2) { animation-delay: .7s; }
+@keyframes sos-pulse { from { transform: scale(.3); opacity: 1; } to { transform: scale(1); opacity: 0; } }
+.badge.alert { color: #fff; background: #d3263a; border: 1px solid #d3263a; }
+@media (max-width: 800px) {
+  .alert-banner { left: 50%; width: calc(100% - 24px); top: 60px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sos-ring span { animation: none; transform: scale(.8); }
+  .alert-banner { animation: none; }
+}

@@ -39,6 +39,17 @@
   </header>
   <main class="layout">
     <div id="map" class="map"></div>
+    <div id="alert-banner" class="alert-banner" role="alert" hidden>
+      <div class="alert-text">
+        <strong id="alert-title"></strong>
+        <span id="alert-where"></span>
+      </div>
+      <div class="alert-actions">
+        <button type="button" id="alert-go" class="alert-go"></button>
+        <button type="button" id="alert-see"></button>
+        <button type="button" id="alert-close" class="alert-close"></button>
+      </div>
+    </div>
 
     <aside class="panel">
 
@@ -67,6 +78,8 @@
       <form id="report-form" class="report" hidden>
         <button type="button" id="ptt" class="ptt" data-i18n="ptt">Maintenir pour parler</button>
         <p class="hint" data-i18n="ptt.hint">ou maintenir la barre espace, hors des champs de saisie</p>
+        <button type="button" id="sos" class="sos" data-i18n="sos">Demander du renfort</button>
+        <button type="button" id="sos-clear" class="sos-clear" data-i18n="sos.clear" hidden>Situation sécurisée</button>
         <label for="text" data-i18n="text.label">Annonce écrite</label>
         <textarea id="text" name="text" rows="2" placeholder="Je suis au sud de l'église." data-i18n-attr="placeholder:text.placeholder" required></textarea>
         <button type="submit" id="send" data-i18n="send">Envoyer</button>
