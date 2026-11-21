@@ -461,11 +461,11 @@ async def _enemies_on_route(unit: str, text: str, intent: dict, route: list, sig
     return events[0]
 
 
-ALERT_RADIUS_M = 1500  # unités prévenues quand une unité demande du renfort
+ALERT_RADIUS_M = 3000  # unités prévenues quand une unité demande du renfort (1,5 km était trop juste)
 
 
 async def raise_alert(unit: str, text: str, reason: str | None = None, *, signed: dict | None = None) -> dict:
-    """« À l'aide », « besoin de renfort » : alerte envoyée aux unités à moins de 1,5 km."""
+    """« À l'aide », « besoin de renfort » : alerte envoyée aux unités à moins de 3 km."""
     pos = journal.last_position(unit)
     if pos is None:
         raise UnknownEnemy("Position inconnue : annoncez d'abord où vous êtes, puis redemandez du renfort.")
