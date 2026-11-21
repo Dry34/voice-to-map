@@ -151,18 +151,89 @@ class Journal:
         """État de chaque ennemi : {"E3": {"alive": bool, "lat", "lon"}}, rejoué depuis le journal."""
         state: dict[str, dict] = {}
         rows = self._conn.execute(
-            "SELECT status, lat, lon, json_extract(intent_json, '$.enemy_id') AS eid FROM events "
+            "SELECT status, lat, lon, json_extract(intent_json, '$.enemy_id') AS eid, "
+            "json_extract(intent_json, '$.sim') AS sim FROM events "
             "WHERE json_extract(intent_json, '$.subject') = 'enemy' AND eid IS NOT NULL "
             "AND seq > ? ORDER BY seq",
             (self.last_clear(),),
         )
         for r in rows:
-            e = state.setdefault(r["eid"], {"alive": True, "lat": None, "lon": None})
+            e = state.setdefault(r["eid"], {"alive": True, "lat": None, "lon": None, "home": None})
             if r["status"] == "enemy_down":
                 e["alive"] = False
             elif r["status"] == "confirmed" and r["lat"] is not None:
                 e.update(lat=r["lat"], lon=r["lon"])
+                if not r["sim"]:  # là où une unité l'a vu : la simulation le fait rôder autour
+                    e["home"] = (r["lat"], r["lon"])
         return state
+
+    def groups(self) -> dict[str, list[str]]:
+        """Escouades actuelles {"G1": ["ALPHA 1", "TOM 2"]}, rejouées depuis la dernière remise à zéro.
+
+        Événements « group » : intent.type = group_join (members, group_id) ou group_leave.
+        Une unité qui quitte la carte (« left ») quitte aussi son escouade ; une escouade
+        réduite à une unité est dissoute.
+        """
+        of: dict[str, str] = {}
+        rows = self._conn.execute(
+            "SELECT unit, status, intent_json FROM events WHERE seq > ? AND status IN ('group', 'left') ORDER BY seq",
+            (self.last_clear(),),
+        )
+
+        def leave(u: str) -> None:
+            gid = of.pop(u, None)
+            rest = [m for m, g in of.items() if g == gid]
+            if gid and len(rest) < 2:
+                for m in rest:
+                    of.pop(m, None)
+
+        for r in rows:
+            intent = json.loads(r["intent_json"] or "{}")
+            if r["status"] == "left" or intent.get("type") == "group_leave":
+                leave(r["unit"])
+            elif intent.get("type") == "group_join":
+                gid = intent["group_id"]
+                for m in intent.get("members", []):
+                    if of.get(m) not in (None, gid):
+                        leave(m)
+                    of[m] = gid
+        out: dict[str, list[str]] = {}
+        for m, g in of.items():
+            out.setdefault(g, []).append(m)
+        return {g: sorted(ms) for g, ms in sorted(out.items()) if len(ms) >= 2}
+
+    def group_of(self, unit: str) -> tuple[str, list[str]] | None:
+        for gid, members in self.groups().items():
+            if unit in members:
+                return gid, members
+        return None
+
+    def units_on_map(self) -> list[str]:
+        """Unités qui ont une position depuis la dernière remise à zéro (hors SIMULATION / SYSTÈME)."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT unit FROM events WHERE seq > ? AND status = 'confirmed' AND lat IS NOT NULL "
+            "AND coalesce(json_extract(intent_json, '$.subject'), 'self') != 'enemy'",
+            (self.last_clear(),),
+        )
+        return [r["unit"] for r in rows if self.last_position(r["unit"])]
+
+    def last_heading(self, unit: str) -> float | None:
+        """Direction de marche de l'unité (cap de ses deux dernières positions), ou None."""
+        from ..geo.geometry import bearing_between, haversine
+
+        rows = self._conn.execute(
+            "SELECT lat, lon, json_extract(intent_json, '$.route') AS route FROM events "
+            "WHERE unit = ? AND seq > ? AND status = 'confirmed' AND lat IS NOT NULL "
+            "AND coalesce(json_extract(intent_json, '$.subject'), 'self') != 'enemy' ORDER BY seq DESC LIMIT 2",
+            (unit, self.last_clear()),
+        ).fetchall()
+        if not rows:
+            return None
+        # Direction générale entre les deux dernières positions (le dernier bout d'itinéraire
+        # n'est pas fiable : l'arrivée dans une cour peut partir dans n'importe quel sens).
+        if len(rows) == 2 and haversine((rows[1]["lat"], rows[1]["lon"]), (rows[0]["lat"], rows[0]["lon"])) > 5:
+            return bearing_between((rows[1]["lat"], rows[1]["lon"]), (rows[0]["lat"], rows[0]["lon"]))
+        return None
 
     def last_clear(self) -> int:
         """seq de la dernière remise à zéro de la carte (0 si jamais)."""

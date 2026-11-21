@@ -5,6 +5,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from . import sim
 from .api.routes import router
 from .config import ROOT
 
@@ -24,4 +25,10 @@ class FrontendFiles(StaticFiles):
 
 app = FastAPI(title="Voice-to-Map")
 app.include_router(router)
+
+
+@app.on_event("startup")
+async def _start_simulation() -> None:
+    sim.start()  # tourne en fond, ne fait rien tant que la simulation est coupée
+
 app.mount("/", FrontendFiles(directory=ROOT / "frontend", html=True), name="frontend")
