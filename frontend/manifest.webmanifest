@@ -1,0 +1,17 @@
+{
+  "name": "Voice-to-Map",
+  "short_name": "Voice-to-Map",
+  "description": "Les unités annoncent leur position à la voix, la carte partagée se met à jour.",
+  "start_url": "app.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#141d21",
+  "theme_color": "#1e2b30",
+  "lang": "fr",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

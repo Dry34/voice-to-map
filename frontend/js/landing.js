@@ -174,3 +174,8 @@ $("replay").addEventListener("click", play);
 // Changement de langue : la démo affiche la phrase dans la nouvelle langue.
 onLangChange(() => { if (demo.classList.contains("done")) $("said").textContent = line(2); });
 play();
+
+// Application installable et utilisable hors ligne (voir sw.js).
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => { /* navigation privée, http… : tant pis */ });
+}
