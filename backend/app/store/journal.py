@@ -218,9 +218,17 @@ class Journal:
         return [r["unit"] for r in rows if self.last_position(r["unit"])]
 
     def last_heading(self, unit: str) -> float | None:
-        """Direction de marche de l'unité (cap de ses deux dernières positions), ou None."""
+        """Où regarde l'unité : dernier cap enregistré (« je regarde à 3h » ou sens de marche), ou None."""
         from ..geo.geometry import bearing_between, haversine
 
+        row = self._conn.execute(
+            "SELECT json_extract(intent_json, '$.heading_deg') AS h FROM events WHERE unit = ? AND seq > ? "
+            "AND status IN ('confirmed', 'facing') AND json_extract(intent_json, '$.heading_deg') IS NOT NULL "
+            "AND coalesce(json_extract(intent_json, '$.subject'), 'self') != 'enemy' ORDER BY seq DESC LIMIT 1",
+            (unit, self.last_clear()),
+        ).fetchone()
+        if row:
+            return float(row["h"])
         rows = self._conn.execute(
             "SELECT lat, lon, json_extract(intent_json, '$.route') AS route FROM events "
             "WHERE unit = ? AND seq > ? AND status = 'confirmed' AND lat IS NOT NULL "
@@ -234,6 +242,21 @@ class Journal:
         if len(rows) == 2 and haversine((rows[1]["lat"], rows[1]["lon"]), (rows[0]["lat"], rows[0]["lon"])) > 5:
             return bearing_between((rows[1]["lat"], rows[1]["lon"]), (rows[0]["lat"], rows[0]["lon"]))
         return None
+
+    def last_route(self, unit: str) -> list | None:
+        """Itinéraire du dernier déplacement de l'unité (depuis la remise à zéro), ou None."""
+        row = self._conn.execute(
+            "SELECT json_extract(intent_json, '$.route') AS r FROM events WHERE unit = ? AND seq > ? "
+            "AND status = 'confirmed' AND coalesce(json_extract(intent_json, '$.subject'), 'self') != 'enemy' "
+            "ORDER BY seq DESC LIMIT 1",
+            (unit, self.last_clear()),
+        ).fetchone()
+        return json.loads(row["r"]) if row and row["r"] else None
+
+    def since_clear(self) -> list[dict]:
+        """Événements depuis la dernière remise à zéro (elle comprise) : ce que montrent les cartes."""
+        rows = self._conn.execute("SELECT * FROM events WHERE seq >= ? ORDER BY seq", (self.last_clear(),))
+        return [_to_event(r) for r in rows]
 
     def last_clear(self) -> int:
         """seq de la dernière remise à zéro de la carte (0 si jamais)."""

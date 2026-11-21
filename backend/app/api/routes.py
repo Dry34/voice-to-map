@@ -213,7 +213,9 @@ def integrity() -> dict:
 @router.websocket("/ws")
 async def websocket(ws: WebSocket) -> None:
     await hub.connect(ws)
-    await ws.send_json({"type": "snapshot", "events": journal.all()})
+    # Depuis la dernière remise à zéro seulement : la carte et l'historique repartent de là
+    # (le journal complet reste vérifiable avec /api/integrity et lisible avec /api/events).
+    await ws.send_json({"type": "snapshot", "events": journal.since_clear()})
     try:
         while True:
             # Seul message attendu : {"type": "presence", "unit": "ALPHA 1" | null}
