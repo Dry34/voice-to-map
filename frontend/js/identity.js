@@ -5,6 +5,8 @@
 // Chaque onglet retient son unité (sessionStorage), on peut donc tester deux unités
 // dans deux onglets du même navigateur.
 
+import * as outbox from "./outbox.js";
+
 const DB = "voice-to-map";
 const STORE = "identities";
 const TAB_KEY = "vtm-unit";
@@ -101,37 +103,116 @@ export function leave() {
   tabUnit.set(null);
 }
 
-export async function sendText(identity, text) {
-  return postJson("/api/reports", { ...(await signWith(identity, "report", text)), text });
-}
+// --- Envoi des annonces, avec boîte d'envoi hors ligne ----------------------
 
-export async function sendAudio(identity, blob, filename) {
-  const signed = await signWith(identity, "audio", await blob.arrayBuffer());
-  const form = new FormData();
-  for (const [k, v] of Object.entries(signed)) form.append(k, String(v));
-  form.append("audio", blob, filename);
-  const r = await fetch("/api/reports/audio", { method: "POST", body: form });
+class NetworkError extends Error {}
+// Réseau absent, ou tunnel Cloudflare qui ne joint plus le serveur : l'annonce est gardée.
+const OFFLINE_STATUS = new Set([521, 522, 523, 524, 530]);
+
+async function post(url, init) {
+  if (navigator.onLine === false) throw new NetworkError("offline");
+  let r;
+  try { r = await fetch(url, init); } catch { throw new NetworkError("offline"); }
+  if (OFFLINE_STATUS.has(r.status)) throw new NetworkError(`HTTP ${r.status}`);
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
   return data;
 }
 
+function postText(payload, queued) {
+  return post("/api/reports", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...payload, queued }),
+  });
+}
+
+function postAudio(payload, queued) {
+  const form = new FormData();
+  for (const k of ["unit", "ts", "nonce", "signature"]) form.append(k, String(payload[k]));
+  form.append("queued", queued ? "true" : "false");
+  form.append("audio", payload.blob, payload.filename);
+  return post("/api/reports/audio", { method: "POST", body: form });
+}
+
+/** Annonce écrite. Hors ligne : gardée, renvoie {queued: true}. */
+export async function sendText(identity, text) {
+  const payload = { ...(await signWith(identity, "report", text)), text };
+  try { return await postText(payload, false); } catch (err) {
+    if (!(err instanceof NetworkError)) throw err;
+    await outbox.add({ kind: "text", payload });
+    return { queued: true };
+  }
+}
+
+/** Annonce vocale. Hors ligne : l'enregistrement est gardé, renvoie {queued: true}. */
+export async function sendAudio(identity, blob, filename) {
+  const payload = { ...(await signWith(identity, "audio", await blob.arrayBuffer())), blob, filename };
+  try { return await postAudio(payload, false); } catch (err) {
+    if (!(err instanceof NetworkError)) throw err;
+    await outbox.add({ kind: "audio", payload });
+    return { queued: true };
+  }
+}
+
+function postAction(url, payload, queued) {
+  return post(url, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...payload, queued }),
+  });
+}
+
+/** Action signée (renfort, neutraliser, confirmer…). Hors ligne : gardée, renvoie {queued: true}. */
+async function sendAction(url, payload) {
+  try { return await postAction(url, payload, false); } catch (err) {
+    if (!(err instanceof NetworkError)) throw err;
+    await outbox.add({ kind: "action", url, payload });
+    return { queued: true };
+  }
+}
+
+export const pendingCount = () => outbox.count().catch(() => 0);
+
+let flushing = false;
+/**
+ * Envoie les annonces gardées, dans l'ordre. onSent(événement) pour chaque annonce passée,
+ * onError(message) pour une annonce refusée (elle est retirée). S'arrête au premier souci réseau.
+ */
+export async function flushOutbox({ onSent, onError } = {}) {
+  if (flushing) return;
+  flushing = true;
+  try {
+    for (const item of await outbox.all()) {
+      try {
+        const ev = item.kind === "audio" ? await postAudio(item.payload, true)
+          : item.kind === "action" ? await postAction(item.url, item.payload, true)
+          : await postText(item.payload, true);
+        await outbox.remove(item.id);
+        onSent?.(ev);
+      } catch (err) {
+        if (err instanceof NetworkError) break;   // toujours hors ligne : on réessaiera
+        await outbox.remove(item.id);             // refusée (trop vieille, en double…) : on l'abandonne
+        onError?.(err.message);
+      }
+    }
+  } finally {
+    flushing = false;
+  }
+}
+
 export async function killEnemy(identity, enemyId) {
-  return postJson("/api/enemies/kill", { ...(await signWith(identity, "kill", enemyId)), enemy_id: enemyId });
+  return sendAction("/api/enemies/kill", { ...(await signWith(identity, "kill", enemyId)), enemy_id: enemyId });
 }
 
 export async function leaveGroup(identity) {
-  return postJson("/api/groups/leave", await signWith(identity, "group_leave", ""));
+  return sendAction("/api/groups/leave", await signWith(identity, "group_leave", ""));
 }
 
 export async function confirmReport(identity, seq) {
-  return postJson("/api/reports/confirm", { ...(await signWith(identity, "confirm", String(seq))), seq });
+  return sendAction("/api/reports/confirm", { ...(await signWith(identity, "confirm", String(seq))), seq });
 }
 
 export async function raiseAlert(identity) {
-  return postJson("/api/alerts", await signWith(identity, "sos", ""));
+  return sendAction("/api/alerts", await signWith(identity, "sos", ""));
 }
 
 export async function clearAlert(identity) {
-  return postJson("/api/alerts/clear", await signWith(identity, "sos_clear", ""));
+  return sendAction("/api/alerts/clear", await signWith(identity, "sos_clear", ""));
 }

@@ -209,3 +209,6 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
 .ask[open] { animation: ask-in .18s ease-out; }
 @keyframes ask-in { from { transform: translateY(8px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .ask[open] { animation: none; } }
+
+/* Annonces gardées hors ligne */
+.pending { margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: #e0b04e; color: #1e2b30; font-weight: 700; }
