@@ -29,13 +29,14 @@ where each FACT is:
   "callsign": string | null,          // unit callsign if spoken ("Alpha 1", "Bravo deux"), written like "ALPHA 1"
   "subject": "self" | "enemy",        // who is being located: the reporting unit, or an enemy it sees
   "with_units": [string],             // only for self: OTHER units moving/standing together with the speaker
+  "solo": boolean,                    // only for self: the speaker goes ALONE, without their squad
   "enemy_id": string | null,          // only for enemy: id of an ALREADY KNOWN enemy if named ("E3", "ennemi 3", "E 3" -> "E3")
   "enemy_ids": [string],              // only for kill: every enemy named ("E1, E2 et ennemi 3" -> ["E1","E2","E3"])
   "scope": "listed" | "nearest" | "around_me" | "all" | null,   // only for kill: which enemies
   "count": integer | null,            // only for enemy: how many ("trois ennemis" -> 3)
   "description": string | null,       // only for enemy: short French description ("2 hommes armés", "véhicule blindé")
   "on_route": boolean,                // only for enemy: seen ON THE WAY of the unit's move ("sur le chemin", "en route")
-  "type": "position" | "movement" | "kill" | "group_join" | "group_leave" | "facing" | "confirm",   // "kill" only for enemy
+  "type": "position" | "movement" | "kill" | "group_join" | "group_leave" | "facing" | "confirm" | "sos" | "sos_clear",   // "kill" only for enemy
   "relation": "at" | "near" | "north_of" | "south_of" | "east_of" | "west_of" | "towards" | "along" | "intersection" | "offset" | "turn" | "unknown",
   "landmark": {"name": string, "kind": string} | null,
   "landmarks": [string, string],      // only for "intersection": the two street names
@@ -105,6 +106,12 @@ Rules:
   ("je suis la route" = I follow the road, NOT "I am".)
 - Confirming a previous report: "confirmé", "je confirme", "affirmatif", "c'est bon", "validé", "confirmed"
   -> subject self, type "confirm", relation "unknown", landmark null.
+- "Je pars tout seul à 6h, je marche 40 m", "je me sépare et je vais au Louvre", "j'y vais seul" -> self, solo true
+  (the speaker leaves their squad and moves alone), plus the movement itself.
+- Distress: "à l'aide", "besoin de renfort", "on est en danger", "on est pris à partie", "blessé", "mayday", "SOS",
+  "help", "need backup" -> subject self, type "sos", description = short reason in French if said ("blessé", "pris à
+  partie par 5 ennemis"). If enemies are also described, add a separate enemy fact.
+  "Situation sécurisée", "c'est bon on est en sécurité", "fin d'alerte", "all clear" -> subject self, type "sos_clear".
 - Facing: "je regarde à 3h", "on se tourne vers 9 heures", "face au nord", "je regarde vers l'est"
   -> subject self, type "facing", clock (relative, 1-12) or direction (absolute N/E/S/W…), landmark null.
 - Kill with a clock position: "ennemi éliminé à 4h", "j'ai abattu le tango à midi" -> kill, clock 4 / 12,
@@ -135,7 +142,7 @@ def _confidence(raw: dict) -> float:
     value = raw.get("confidence")
     if isinstance(value, (int, float)) and value > 0:
         return float(value)
-    return 0.8 if raw.get("relation") not in (None, "unknown") or raw.get("type") in ("kill", "group_join", "group_leave", "facing", "confirm") else 0.3
+    return 0.8 if raw.get("relation") not in (None, "unknown") or raw.get("type") in ("kill", "group_join", "group_leave", "facing", "confirm", "sos", "sos_clear") else 0.3
 
 
 def _normalize(raw: dict) -> dict:
@@ -148,10 +155,11 @@ def _normalize(raw: dict) -> dict:
         "turn": raw.get("turn") if raw.get("turn") in ("left", "right", "straight", "back") else None,
         "blocks": int(raw["blocks"]) if isinstance(raw.get("blocks"), (int, float)) and 0 < raw["blocks"] <= 10 else None,
         "with_units": [str(x) for x in (raw.get("with_units") or []) if x][:5],
+        "solo": bool(raw.get("solo")),
         "enemy_id": _enemy_id(raw.get("enemy_id")),
         "enemy_ids": [e for e in (_enemy_id(x) for x in (raw.get("enemy_ids") or [])) if e][:20],
         "scope": raw.get("scope") if raw.get("scope") in ("listed", "nearest", "around_me", "all") else None,
-        "type": raw.get("type") if raw.get("type") in ("position", "movement", "kill", "group_join", "group_leave", "facing", "confirm") else "position",
+        "type": raw.get("type") if raw.get("type") in ("position", "movement", "kill", "group_join", "group_leave", "facing", "confirm", "sos", "sos_clear") else "position",
         "relation": raw.get("relation") if raw.get("relation") in RELATIONS else "unknown",
         "landmark": None,
         "landmarks": [str(x) for x in (raw.get("landmarks") or [])][:2],

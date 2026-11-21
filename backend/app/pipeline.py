@@ -65,6 +65,14 @@ async def _process_fact(unit: str, text: str, intent: dict, signed: dict | None,
         return await set_facing(unit, intent, text, signed=signed)
     if intent.get("type") == "confirm":
         return await confirm_pending(unit, None, text, signed=signed)
+    if intent.get("type") == "sos":
+        return await raise_alert(unit, text, intent.get("description"), signed=signed)
+    if intent.get("type") == "sos_clear":
+        return await clear_alert(unit, text, signed=signed)
+    solo_left = None
+    if intent.get("solo") and journal.group_of(unit):
+        # « Je pars tout seul » : on quitte l'escouade, puis seul l'auteur bouge.
+        solo_left = await leave_group(unit, text, signed=signed)
     spoken = intent.get("callsign")
     if spoken and spoken != unit:
         if signed:
@@ -208,6 +216,15 @@ async def _process_fact(unit: str, text: str, intent: dict, signed: dict | None,
                 place = {**place, "lat": snapped[0], "lon": snapped[1], "label": f"{place['label']} · {street[0]}"}
     if group > 1 and confirmed:
         return await _enemy_group(unit, text, intent, place, group, signed)
+    names: list[str] = []
+    if confirmed and intent.get("subject") != "enemy" and not intent.get("solo"):
+        # Coéquipiers nommés (« moi et Tom, on va à Châtelet ») et escouade : ils suivent, juste à côté.
+        named = [n for n in (_resolve_unit_name(x) for x in intent.get("with_units") or []) if n]
+        squad = journal.group_of(unit)
+        names = [n for n in dict.fromkeys(named + (squad[1] if squad else [])) if n != unit]
+        if names:
+            intent["squad"] = squad[0] if squad else None
+            intent["squad_members"] = [unit, *names]
     event = journal.append(
         unit=unit,
         transcript=text,
@@ -221,13 +238,10 @@ async def _process_fact(unit: str, text: str, intent: dict, signed: dict | None,
         signed=signed,
     )
     await hub.broadcast({"type": "event", "event": event})
-    if confirmed and intent.get("subject") != "enemy":
-        # Coéquipiers nommés (« moi et Tom, on va à Châtelet ») et escouade : ils suivent, juste à côté.
-        named = [n for n in (_resolve_unit_name(x) for x in intent.get("with_units") or []) if n]
-        squad = journal.group_of(unit)
-        names = list(dict.fromkeys(named + (squad[1] if squad else [])))
-        if [n for n in names if n != unit]:
-            event["companions"] = await _move_companions(unit, text, intent, place, names)
+    if names:
+        event["companions"] = await _move_companions(unit, text, intent, place, names)
+    if solo_left:
+        event["companions"] = [solo_left, *event.get("companions", [])]
     return event
 
 
@@ -445,6 +459,42 @@ async def _enemies_on_route(unit: str, text: str, intent: dict, route: list, sig
         events.append(ev)
         await hub.broadcast({"type": "event", "event": ev})
     return events[0]
+
+
+ALERT_RADIUS_M = 1500  # unités prévenues quand une unité demande du renfort
+
+
+async def raise_alert(unit: str, text: str, reason: str | None = None, *, signed: dict | None = None) -> dict:
+    """« À l'aide », « besoin de renfort » : alerte envoyée aux unités à moins de 1,5 km."""
+    pos = journal.last_position(unit)
+    if pos is None:
+        raise UnknownEnemy("Position inconnue : annoncez d'abord où vous êtes, puis redemandez du renfort.")
+    recipients = []
+    for other in journal.units_on_map():
+        p = journal.last_position(other)
+        if other != unit and p and haversine(pos, p) <= ALERT_RADIUS_M:
+            recipients.append({"unit": other, "distance_m": round(haversine(pos, p))})
+    recipients.sort(key=lambda r: r["distance_m"])
+    event = journal.append(
+        unit=unit, transcript=text,
+        intent={"type": "sos", "subject": "self", "reason": reason, "recipients": recipients,
+                "radius_m": ALERT_RADIUS_M, "confidence": 1.0},
+        lat=pos[0], lon=pos[1], uncertainty_m=None, resolved_landmark=None, status="alert",
+        origin_node=settings.node_mode, signed=signed,
+    )
+    await hub.broadcast({"type": "event", "event": event})
+    return event
+
+
+async def clear_alert(unit: str, text: str, *, signed: dict | None = None) -> dict:
+    """« Situation sécurisée » : fin de l'alerte de l'unité."""
+    event = journal.append(
+        unit=unit, transcript=text, intent={"type": "sos_clear", "subject": "self", "confidence": 1.0},
+        lat=None, lon=None, uncertainty_m=None, resolved_landmark=None, status="alert_clear",
+        origin_node=settings.node_mode, signed=signed,
+    )
+    await hub.broadcast({"type": "event", "event": event})
+    return event
 
 
 async def confirm_pending(unit: str, seq: int | None, text: str, *, signed: dict | None = None) -> dict:

@@ -228,3 +228,9 @@ def test_street_name_must_match():
     from app.geo.osm import name_matches
     assert name_matches("rue faubourg saint-antoine", "Rue du Faubourg Saint-Antoine")
     assert not name_matches("rue faubourg saint-antoine", "Rue du Grand Prieuré")
+
+
+def test_sos_phrases():
+    for t in ["À l'aide, on est pris à partie !", "Besoin de renfort.", "Mayday mayday", "Need backup"]:
+        assert parse(t)["type"] == "sos", t
+    assert parse("Situation sécurisée.")["type"] == "sos_clear"

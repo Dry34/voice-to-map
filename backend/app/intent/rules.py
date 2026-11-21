@@ -89,9 +89,18 @@ def _landmark(raw: str) -> dict:
 CONFIRM = re.compile(r"^\W*(?:je\s+)?(confirm[ée]?s?|confirme|affirmatif|c'est bon|valid[ée]|confirmed|affirmative|roger)\W*$", re.I)
 
 
+SOS = re.compile(r"\b(à l'aide|a l'aide|au secours|renforts?|en danger|mayday|sos|help|backup|bless[ée]s?)\b", re.I)
+SOS_CLEAR = re.compile(r"\b(situation s[ée]curis[ée]e|en s[ée]curit[ée]|fin d'alerte|all clear)\b", re.I)
+
+
 def parse(text: str) -> dict:
     out = _parse(text)
     low = text.lower()
+    for regex, kind in ((SOS_CLEAR, "sos_clear"), (SOS, "sos")):
+        if regex.search(low):
+            out.update(subject="self", type=kind, relation="unknown", landmark=None, confidence=0.9, count=None,
+                       description=None, enemy_id=None, enemy_ids=[], scope=None, clock=None)
+            return out
     if CONFIRM.match(split_callsign(text.strip())[1]):
         out.update(subject="self", type="confirm", relation="unknown", landmark=None, confidence=0.9,
                    count=None, description=None, enemy_id=None, enemy_ids=[], scope=None, clock=None)
