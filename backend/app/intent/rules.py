@@ -21,6 +21,20 @@ MOVEMENT_WORDS = re.compile(
     r"\b(moved|moving|move|heading|going|walking|advancing|je vais|on avance|en route|vers)\b", re.I
 )
 
+ENEMY_WORDS = re.compile(r"\b(enemy|enemies|hostiles?|contact|ennemis?|tangos?|cibles?|targets?)\b|\be\s?\d+\b", re.I)
+ENEMY_ID = re.compile(r"\b(?:e|ennemi|enemy|cible|target)\s*(?:n°|numéro|number|no\.?)?\s*-?\s*(\d+)\b", re.I)
+KILL_WORDS = re.compile(r"\b(neutralis\w*|abattu\w*|tu[ée]e?s?|d[ée]truit\w*|[ée]limin[ée]\w*|killed|down|destroyed|neutrali[sz]ed)\b", re.I)
+COUNT = re.compile(r"\b(\d+|" + "|".join(["one", "two", "three", "four", "five", "un", "une", "deux", "trois", "quatre", "cinq"]) + r")\s+(?:enem|hostil|ennemi|tango)", re.I)
+OFFSET = re.compile(
+    r"(\d+)\s*(?:m|meters|metres|mètres)\s+(?:au |to the )?"
+    r"(nord-est|nord-ouest|sud-est|sud-ouest|north-?east|north-?west|south-?east|south-?west|nord|sud|est|ouest|north|south|east|west)\b",
+    re.I,
+)
+OFFSET_DIR = {"nord": "N", "north": "N", "sud": "S", "south": "S", "est": "E", "east": "E", "ouest": "W", "west": "W",
+              "nord-est": "NE", "northeast": "NE", "north-east": "NE", "nord-ouest": "NW", "northwest": "NW",
+              "north-west": "NW", "sud-est": "SE", "southeast": "SE", "south-east": "SE", "sud-ouest": "SW",
+              "southwest": "SW", "south-west": "SW"}
+
 _LEADING = re.compile(r"^(the|a|an|la|le|les|l')\s*", re.I)
 
 NATO = ("alpha|bravo|charlie|delta|echo|foxtrot|golf|hotel|india|juliett?|kilo|lima|mike|november|"
@@ -69,6 +83,30 @@ def _landmark(raw: str) -> dict:
 
 
 def parse(text: str) -> dict:
+    out = _parse(text)
+    low = text.lower()
+    if ENEMY_WORDS.search(low):
+        m = COUNT.search(low)
+        n = m.group(1) if m else None
+        out["subject"] = "enemy"
+        out["count"] = int(n) if n and n.isdigit() else NUMBER_WORDS.get(n) if n else None
+        out["description"] = None
+        mid = ENEMY_ID.search(low)
+        out["enemy_id"] = f"E{int(mid.group(1))}" if mid else None
+        if KILL_WORDS.search(low):
+            out.update(type="kill", relation="unknown", landmark=None, confidence=0.8)
+            return out
+        if out["relation"] in ("unknown", "along", "at", "near"):
+            m = OFFSET.search(low)
+            if m:
+                out.update(relation="offset", landmark=None, distance_m=float(m.group(1)),
+                           direction=OFFSET_DIR[m.group(2).lower()], confidence=0.65)
+    else:
+        out.update(subject="self", count=None, description=None, enemy_id=None)
+    return out
+
+
+def _parse(text: str) -> dict:
     callsign, t = split_callsign(text.strip())
     t = t.strip()
     low = t.lower()

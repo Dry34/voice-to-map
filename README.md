@@ -40,6 +40,8 @@ voice-to-map/
 │   │   ├── pipeline.py         texte → intention → lieu → événement → diffusion
 │   │   ├── api/routes.py       routes HTTP et WebSocket                [B]
 │   │   ├── store/journal.py    journal SQLite en ajout seul, chaîné SHA-256  [B]
+│   │   ├── store/units.py      registre unité → clé publique           [B]
+│   │   ├── security/signing.py vérification des signatures Ed25519     [B]
 │   │   ├── speech/stt.py       transcription Voxtral                   [B]
 │   │   ├── intent/
 │   │   │   ├── extractor.py    Mistral en JSON, repli sur les règles   [C]
@@ -56,6 +58,7 @@ voice-to-map/
 │   ├── css/style.css
 │   └── js/
 │       ├── app.js              formulaire, historique, intégrité
+│       ├── identity.js         clés Ed25519 du terminal, réservation d'unité, envoi signé
 │       ├── ptt.js              push-to-talk (bouton maintenu ou barre espace)
 │       ├── map.js              marqueur, cercle d'incertitude, tracé par unité
 │       └── socket.js           WebSocket avec reconnexion
@@ -67,14 +70,24 @@ voice-to-map/
 
 | Méthode | Route | Rôle |
 |---|---|---|
-| `POST` | `/api/reports` | `{"unit": "ALPHA 2", "text": "I am south of the church."}` → événement créé |
-| `POST` | `/api/reports/audio` | formulaire `unit` + fichier `audio` (webm, m4a, ogg, 5 Mo max) → transcription Voxtral puis même traitement |
+| `POST` | `/api/units/claim` | réserve une unité pour la clé publique du terminal (signé) |
+| `POST` | `/api/units/release` | libère l'unité (signé par son terminal) |
+| `GET` | `/api/units` | unités déjà réservées |
+| `GET` | `/api/enemies` | état des ennemis (vivant, dernière position) |
+| `POST` | `/api/enemies/kill` | neutraliser un ennemi (signé) |
+| `POST` | `/api/reports` | `{unit, text, ts, nonce, signature}` → événement créé |
+| `POST` | `/api/reports/audio` | formulaire `unit`, `ts`, `nonce`, `signature` + fichier `audio` (webm, m4a, ogg, 5 Mo max) → transcription Voxtral puis même traitement |
 | `GET` | `/api/events?unit=` | historique complet ou par unité |
 | `GET` | `/api/integrity` | rejoue la chaîne de hash : `{"ok", "count", "broken_at"}` |
 | `GET` | `/api/config` | zone, mode du nœud, moteur d'analyse |
 | `WS` | `/ws` | `snapshot` à la connexion, puis un message `event` par annonce |
 
 ## Ce qui marche
+
+- Un terminal = une unité. Au premier lancement, le navigateur crée une paire de clés Ed25519 (clé privée non exportable, gardée dans IndexedDB) et réserve son unité. Chaque annonce est signée : le serveur refuse une annonce pour ALPHA 1 qui ne vient pas du terminal d'ALPHA 1, et un indicatif prononcé différent est ignoré. « Quitter l'unité » retire son point de toutes les cartes. La carte montre toutes les unités, la sienne en avant. « Poste de commandement » : tout voir sans unité. Unité bloquée (clé perdue) : `scripts/release_unit.py "ALPHA 1"`.
+- Ennemis : « Contact, 5 ennemis près de l'Hôtel-Dieu » crée E1…E5, alignés sur la rue la plus proche, regroupés en cluster au dézoom. « E3 au sud du pont » le déplace, « E3 neutralisé » (ou le bouton sur le losange, signé) le grise. « J'ai tué l'ennemi » sans numéro : le plus proche.
+- « Je vais vers Bravo 2 » : l'unité est placée sur la dernière position de BRAVO 2.
+- Remise à zéro de la carte (unités et ennemis, l'historique reste) : `backend/.venv/bin/python scripts/clear_map.py`.
 
 - Push-to-talk : maintenir le bouton (ou la barre espace), parler, relâcher. L'audio part à Voxtral (`STT_MODEL`, `STT_LANGUAGE=fr`, qui comprend aussi l'anglais), puis suit le même chemin qu'une annonce tapée.
 - Un indicatif prononcé (« Alpha 1, … ») remplace l'unité choisie dans le formulaire.

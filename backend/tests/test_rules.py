@@ -65,3 +65,79 @@ def test_normalize_callsign():
     assert normalize_callsign("alpha one") == "ALPHA 1"
     assert normalize_callsign("Charlie-3") == "CHARLIE 3"
     assert normalize_callsign("Tour Eiffel") is None
+
+
+def test_enemy_near_landmark():
+    i = parse("Contact, trois ennemis au nord de l'église.")
+    assert i["subject"] == "enemy" and i["count"] == 3
+    assert i["relation"] == "north_of" and i["landmark"]["kind"] == "église"
+
+
+def test_enemy_relative_to_me():
+    i = parse("Ennemi à 200 mètres au nord-est.")
+    assert i["subject"] == "enemy"
+    assert (i["relation"], i["direction"], i["distance_m"]) == ("offset", "NE", 200)
+
+
+def test_own_position_is_not_enemy():
+    assert parse("I am south of the church.")["subject"] == "self"
+
+
+def test_enemy_sighting_does_not_move_unit(tmp_path):
+    from app.store.journal import Journal
+    j = Journal(tmp_path / "e.db")
+    common = dict(transcript="x", uncertainty_m=30, resolved_landmark="x", status="confirmed", origin_node="central")
+    j.append(unit="ALPHA 1", intent={"subject": "self"}, lat=48.85, lon=2.35, **common)
+    j.append(unit="ALPHA 1", intent={"subject": "enemy"}, lat=48.90, lon=2.40, **common)
+    assert j.last_position("ALPHA 1") == (48.85, 2.35)
+
+
+def test_name_check_rejects_unrelated_place():
+    from app.geo.osm import name_matches
+    assert not name_matches("bois de Boulogne", "Jardins du Trocadéro")
+    assert name_matches("Dame de Paris", "Cathédrale Notre-Dame de Paris")
+    assert not name_matches("Dame de Paris", "Église Notre-Dame de Grâce de Passy")
+
+
+def test_enemy_kill_and_ids():
+    i = parse("E3 neutralisé.")
+    assert (i["subject"], i["type"], i["enemy_id"]) == ("enemy", "kill", "E3")
+    assert parse("Ennemi 2 abattu.")["enemy_id"] == "E2"
+    i = parse("E4 au sud de l'église.")
+    assert (i["subject"], i["enemy_id"], i["relation"]) == ("enemy", "E4", "south_of")
+
+
+def test_enemy_state(tmp_path):
+    from app.store.journal import Journal
+    j = Journal(tmp_path / "e.db")
+    common = dict(transcript="x", uncertainty_m=30, resolved_landmark="x", origin_node="central")
+    assert j.next_enemy_id() == "E1"
+    j.append(unit="A", intent={"subject": "enemy", "enemy_id": "E1"}, lat=1.0, lon=2.0, status="confirmed", **common)
+    j.append(unit="A", intent={"subject": "enemy", "enemy_id": "E2"}, lat=3.0, lon=4.0, status="confirmed", **common)
+    j.append(unit="A", intent={"subject": "enemy", "type": "kill", "enemy_id": "E1"}, lat=None, lon=None, status="enemy_down", **common)
+    st = j.enemies()
+    assert st["E1"]["alive"] is False and st["E2"]["alive"] is True and st["E2"]["lat"] == 3.0
+    assert j.next_enemy_id() == "E3"
+
+
+def test_clear_resets_positions_and_enemies(tmp_path):
+    from app.store.journal import Journal
+    j = Journal(tmp_path / "e.db")
+    common = dict(transcript="x", uncertainty_m=30, resolved_landmark="x", origin_node="central")
+    j.append(unit="A", intent={"subject": "self"}, lat=1.0, lon=2.0, status="confirmed", **common)
+    j.append(unit="A", intent={"subject": "enemy", "enemy_id": "E1"}, lat=1.0, lon=2.0, status="confirmed", **common)
+    j.append(unit="SYSTÈME", intent={"type": "clear"}, lat=None, lon=None, status="cleared", **common)
+    assert j.last_position("A") is None and j.enemies() == {} and j.next_enemy_id() == "E1"
+
+
+def test_kill_without_number():
+    i = parse("J'ai tué l'ennemi.")
+    assert (i["subject"], i["type"], i["enemy_id"]) == ("enemy", "kill", None)
+
+
+def test_project_on_line():
+    from app.geo.geometry import project_on_line
+    line = [(48.860, 2.340), (48.860, 2.344)]  # rue est-ouest
+    q, bearing = project_on_line((48.8603, 2.342), line)
+    assert abs(q[0] - 48.860) < 1e-9 and abs(q[1] - 2.342) < 1e-6
+    assert round(bearing) == 90
