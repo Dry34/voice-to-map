@@ -50,6 +50,19 @@ const DICT = {
   "conn": { fr: "Connexion", en: "Connection" },
 };
 const allEvents = []; // pour reconstruire l'historique quand on change de langue
+
+// Dernier état connu de la carte, gardé dans le navigateur : sans réseau, on le réaffiche.
+const STATE_KEY = "vtm-last-events";
+let saveTimer = null;
+function saveState() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STATE_KEY, JSON.stringify(allEvents.slice(-400))); } catch { /* plein ou privé */ }
+  }, 1000);
+}
+function cachedEvents() {
+  try { return JSON.parse(localStorage.getItem(STATE_KEY) || "[]"); } catch { return []; }
+}
 const confirmedSeqs = new Set(); // annonces « à confirmer » qui ont été confirmées depuis
 const activeAlerts = new Map(); // unité -> événement d'alerte en cours
 const seen = new Set();
@@ -172,6 +185,7 @@ function addToHistory(ev) {
   li.querySelector(".text").textContent = `« ${ev.transcript} »`;
   li.querySelector(".res").textContent = describe(ev)
     + (ev.intent?.confirmed_from ? ` · ${tr("confirmée", "confirmed")}` : "")
+    + (ev.intent?.delayed ? ` · ${tr("envoyée en différé", "sent late")}` : "")
     + (ev.intent?.callsign_ignored ? tr(` · indicatif « ${ev.intent.callsign} » ignoré`, ` · callsign “${ev.intent.callsign}” ignored`) : "")
     + (ev.intent?.moved_by ? ` · ${tr("déplacé avec", "moved with")} ${ev.intent.moved_by}` : "");
   li.onclick = () => flyTo(ev);
@@ -184,7 +198,7 @@ function addToHistory(ev) {
     btn.onclick = async (e) => {
       e.stopPropagation();
       btn.disabled = true;
-      try { applyAll(await identity.confirmReport(me, ev.seq)); }
+      try { const r = await identity.confirmReport(me, ev.seq); r.queued ? (btn.textContent = await queuedMsg()) : applyAll(r); }
       catch (err) { btn.disabled = false; btn.textContent = err.message; }
     };
     li.appendChild(btn);
@@ -302,7 +316,10 @@ function showBanner(ev) {
   const name = teamName(ev.unit);
   const where = whereFromMe(ev);
   $("alert-title").textContent = tr(`${name} a besoin de vous`, `${name} needs you`);
-  $("alert-where").textContent = [where, ev.intent?.reason].filter(Boolean).join(" · ");
+  // Alerte envoyée en différé (l'unité était hors ligne) : depuis combien de temps elle a été lancée.
+  const ageMin = Math.round((Date.now() - new Date(ev.ts).getTime()) / 60000);
+  const late = ev.intent?.delayed && ageMin >= 1 ? tr(`lancée il y a ${ageMin} min`, `raised ${ageMin} min ago`) : "";
+  $("alert-where").textContent = [where, ev.intent?.reason, late].filter(Boolean).join(" · ");
   $("alert-go").textContent = tr("J'y vais", "On my way");
   $("alert-see").textContent = tr("Voir sur la carte", "Show on map");
   $("alert-close").textContent = tr("Fermer", "Dismiss");
@@ -358,6 +375,7 @@ function handle(ev, live) {
   if (seen.has(ev.id)) return;
   seen.add(ev.id);
   allEvents.push(ev);
+  saveState();
   if (ev.status === "cleared") activeAlerts.clear();
   if (ev.status === "alert") {
     activeAlerts.set(ev.unit, ev);
@@ -380,6 +398,37 @@ function handle(ev, live) {
   const enemy = ev.intent?.subject === "enemy";
   applyEvent(ev, { focus: live && (enemy || !me || ev.unit === me.unit) });
   addToHistory(ev);
+}
+
+// --- Hors ligne : annonces gardées, envoyées au retour du réseau --------------
+
+async function queuedMsg() {
+  const n = await refreshPending();
+  return tr(`Hors ligne : annonce gardée (${n} en attente). Elle partira dès le retour du réseau.`,
+            `Offline: report kept (${n} pending). It will be sent as soon as the network is back.`);
+}
+
+async function refreshPending() {
+  const n = await identity.pendingCount();
+  const el = $("pending");
+  el.hidden = n === 0;
+  el.textContent = tr(`${n} en attente`, `${n} pending`);
+  return n;
+}
+
+async function flushPending() {
+  if (!(await identity.pendingCount())) return;
+  let sent = 0;
+  await identity.flushOutbox({
+    onSent: (ev) => { sent += 1; applyAll(ev); },
+    onError: (msg) => { $("form-msg").className = "msg err"; $("form-msg").textContent = `${tr("Annonce gardée refusée", "Kept report refused")} : ${msg}`; },
+  });
+  const left = await refreshPending();
+  if (sent) {
+    $("form-msg").className = "msg ok";
+    $("form-msg").textContent = tr(`Réseau revenu : ${sent} annonce(s) envoyée(s) en différé.`, `Network back: ${sent} report(s) sent late.`)
+      + (left ? tr(` ${left} encore en attente.`, ` ${left} still pending.`) : "");
+  }
 }
 
 /** Une annonce peut contenir plusieurs faits (ev.also) : on les applique tous et on les résume. */
@@ -436,7 +485,8 @@ function renderSquad() {
     btn.textContent = tr("Quitter l'escouade", "Leave the squad");
     btn.onclick = async () => {
       btn.disabled = true;
-      try { await identity.leaveGroup(me); } catch (err) { btn.textContent = err.message; }
+      try { const r = await identity.leaveGroup(me); if (r.queued) btn.textContent = await queuedMsg(); }
+      catch (err) { btn.textContent = err.message; }
     };
     squadEl.append(btn);
   }
@@ -469,7 +519,11 @@ function render() {
   renderSquad();
   renderSosButtons();
   // Seul un terminal qui tient une unité peut neutraliser (l'action est signée par sa clé).
-  setKillHandler(me ? (id) => identity.killEnemy(me, id) : null);
+  setKillHandler(me ? async (id) => {
+    const r = await identity.killEnemy(me, id);
+    if (r.queued) { $("form-msg").className = "msg err"; $("form-msg").textContent = await queuedMsg(); }
+    return r;
+  } : null);
   if (!me && !pc) refreshTaken();
 }
 
@@ -484,8 +538,17 @@ function relang() {
 
 async function main() {
   setupPrefs(DICT);
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   onLangChange(relang);
-  const config = await (await fetch("/api/config")).json();
+  // Hors ligne : configuration gardée de la dernière visite.
+  let config;
+  try {
+    config = await (await fetch("/api/config")).json();
+    try { localStorage.setItem("vtm-config", JSON.stringify(config)); } catch {}
+  } catch {
+    try { config = JSON.parse(localStorage.getItem("vtm-config")); } catch {}
+    config = config || { node_mode: "central", llm: "mistral", zone_name: "Paris centre", center: [48.8584, 2.347], sim: false };
+  }
   $("node").textContent = `${config.node_mode} · ${config.llm} · ${config.zone_name}`;
   initMap(config.center);
   await refreshColors(); // avant de rejouer l'historique : les tracés prennent tout de suite la bonne couleur
@@ -500,9 +563,10 @@ async function main() {
   me = await identity.current().catch(() => null);
   // Unités remises à zéro côté serveur (scripts/clear_units.py) : l'onglet repasse au choix d'unité.
   if (me) {
-    const taken = await (await fetch("/api/units")).json().catch(() => []);
+    // Hors ligne, on ne peut pas vérifier : on garde l'unité (les annonces partiront au retour du réseau).
+    const taken = await fetch("/api/units").then((r) => r.json()).catch(() => null);
     // Unité libérée, ou reprise par un autre terminal (autre clé) : on repasse au choix.
-    if (!taken.some((u) => u.unit === me.unit && u.public_key === me.publicKey)) { identity.leave(); me = null; }
+    if (taken && !taken.some((u) => u.unit === me.unit && u.public_key === me.publicKey)) { identity.leave(); me = null; }
   }
   render();
 
@@ -547,16 +611,27 @@ async function main() {
 
   // Dire au serveur quelle unité cet onglet tient : tant qu'il est connecté, personne ne peut la reprendre.
   let socket = null;
+  let gotSnapshot = false;
+  // Pas de réponse du serveur au chargement : on réaffiche le dernier état connu de la carte.
+  setTimeout(() => {
+    if (gotSnapshot) return;
+    const saved = cachedEvents();
+    if (!saved.length) return;
+    saved.forEach((ev) => handle(ev, false));
+    $("form-msg").className = "msg err";
+    $("form-msg").textContent = tr("Hors ligne : carte affichée telle qu'à la dernière connexion. Vos annonces seront gardées.",
+                                   "Offline: map shown as of the last connection. Your reports will be kept.");
+  }, 2500);
   announcePresence = () => socket?.send({ type: "presence", unit: me?.unit || null });
   socket = connect({
-    onOpen: () => announcePresence(),
+    onOpen: () => { announcePresence(); flushPending(); },
     onStatus: (up) => {
       $("conn").className = `dot ${up ? "on" : "off"}`;
       connected = up;
       $("conn-label").textContent = up ? tr("Connecté", "Connected") : tr("Déconnecté", "Disconnected");
     },
     onMessage: (msg) => {
-      if (msg.type === "snapshot") msg.events.forEach((ev) => handle(ev, false));
+      if (msg.type === "snapshot") { gotSnapshot = true; msg.events.forEach((ev) => handle(ev, false)); }
       if (msg.type === "event") handle(msg.event, true);
       if (msg.type === "sim") simListener(msg.on);
       if (msg.type === "units") refreshColors();
@@ -580,7 +655,7 @@ async function main() {
     $("form-msg").textContent = tr("Analyse en cours…", "Analysing…");
     try {
       const ev = await identity.sendText(me, text);
-      $("form-msg").textContent = applyAll(ev);
+      $("form-msg").textContent = ev.queued ? await queuedMsg() : applyAll(ev);
       $("text").value = "";
     } catch (err) {
       $("form-msg").className = "msg err";
@@ -598,7 +673,8 @@ async function main() {
     button: $("ptt"),
     upload: (blob, filename) => identity.sendAudio(me, blob, filename),
     onStatus: setMsg,
-    onEvent: (ev) => setMsg(ev.status === "pending_review" && !ev.also ? "" : "ok", `« ${ev.transcript} » → ${applyAll(ev)}`),
+    onEvent: async (ev) => ev.queued ? setMsg("err", await queuedMsg())
+      : setMsg(ev.status === "pending_review" && !ev.also ? "" : "ok", `« ${ev.transcript} » → ${applyAll(ev)}`),
   });
 
   document.querySelectorAll(".sample").forEach((b) => {
@@ -627,12 +703,22 @@ async function main() {
       ok: tr("Envoyer l'alerte", "Send the alert"),
       danger: true,
     }))) return;
-    try { applyAll(await identity.raiseAlert(me)); }
-    catch (err) { $("form-msg").className = "msg err"; $("form-msg").textContent = err.message; }
+    try {
+      const r = await identity.raiseAlert(me);
+      if (r.queued) { $("form-msg").className = "msg err"; $("form-msg").textContent = await queuedMsg(); }
+      else applyAll(r);
+    } catch (err) { $("form-msg").className = "msg err"; $("form-msg").textContent = err.message; }
   };
   $("sos-clear").onclick = async () => {
-    try { applyAll(await identity.clearAlert(me)); } catch (err) { $("form-msg").textContent = err.message; }
+    try {
+      const r = await identity.clearAlert(me);
+      if (r.queued) $("form-msg").textContent = await queuedMsg(); else applyAll(r);
+    } catch (err) { $("form-msg").textContent = err.message; }
   };
+
+  window.addEventListener("online", flushPending);
+  setInterval(flushPending, 15_000);
+  refreshPending();
 
   $("clear-history").onclick = () => {
     hiddenUntil = lastSeq;

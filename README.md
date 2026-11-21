@@ -101,6 +101,7 @@ voice-to-map/
 - Page d'accueil, interface en français et en anglais (drapeau), mode clair et sombre (soleil / lune). Liens directs : `?lang=en`, `?theme=dark`.
 - La remise à zéro vide aussi l'historique affiché ; « Effacer (local) » ne vide que son propre écran.
 - Renfort : « à l'aide », « besoin de renfort » (ou le bouton rouge) prévient les unités à moins de 3 km : bandeau « ALPHA 1 a besoin de vous », distance, bips et annonce vocale, « J'y vais ». « Situation sécurisée » termine l'alerte. « Je pars tout seul » quitte l'escouade ; un déplacement d'escouade tient sur une ligne d'historique.
+- Hors ligne : application installable (service worker `frontend/sw.js`) qui s'ouvre sans réseau avec la dernière carte connue. Annonces et actions signées gardées dans une boîte d'envoi (`js/outbox.js`), envoyées au retour du réseau avec leur heure d'origine (acceptées jusqu'à 24 h, doublons refusés grâce à la signature déjà au journal).
 - Annonce « à confirmer » avec un lieu trouvé : bouton « Confirmer », ou « confirmé » à la voix. Les unités s'arrêtent toujours sur la rue (jamais dans un bâtiment). Ennemi vu sans distance : 50 m devant, dans la rue.
 - Remise à zéro de la carte (unités et ennemis, l'historique reste) : `backend/.venv/bin/python scripts/clear_map.py`.
 
