@@ -23,6 +23,33 @@ MOVEMENT_WORDS = re.compile(
 
 _LEADING = re.compile(r"^(the|a|an|la|le|les|l')\s*", re.I)
 
+NATO = ("alpha|bravo|charlie|delta|echo|foxtrot|golf|hotel|india|juliett?|kilo|lima|mike|november|"
+        "oscar|papa|quebec|romeo|sierra|tango|uniform|victor|whiskey|x-?ray|yankee|zulu")
+NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+                "nine": 9, "ten": 10, "un": 1, "une": 1, "deux": 2, "trois": 3, "quatre": 4, "cinq": 5,
+                "sept": 7, "huit": 8, "neuf": 9, "dix": 10}
+_NUM = r"\d+|" + "|".join(NUMBER_WORDS)
+CALLSIGN = re.compile(rf"^\W*({NATO})[\s-]*({_NUM})\b[\s,.:;!-]*", re.I)
+
+
+def normalize_callsign(value) -> str | None:
+    """« alpha un », « Alpha-1 », « ALPHA 1 » -> « ALPHA 1 ». None si ce n'est pas un indicatif."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    m = re.fullmatch(rf"\s*({NATO})[\s-]*({_NUM})\s*", value, re.I)
+    if not m:
+        return None
+    num = m.group(2).lower()
+    return f"{m.group(1).upper()} {NUMBER_WORDS.get(num, num)}"
+
+
+def split_callsign(text: str) -> tuple[str | None, str]:
+    """Sépare l'indicatif en tête de phrase du reste : « Alpha 1, I am… » -> (« ALPHA 1 », « I am… »)."""
+    m = CALLSIGN.match(text)
+    if not m:
+        return None, text
+    return normalize_callsign(f"{m.group(1)} {m.group(2)}"), text[m.end():]
+
 
 def clean(name: str) -> str:
     name = name.strip().rstrip(".!?,;")
@@ -42,10 +69,12 @@ def _landmark(raw: str) -> dict:
 
 
 def parse(text: str) -> dict:
-    t = text.strip()
+    callsign, t = split_callsign(text.strip())
+    t = t.strip()
     low = t.lower()
     is_move = bool(MOVEMENT_WORDS.search(low))
     base = {
+        "callsign": callsign,
         "type": "movement" if is_move else "position",
         "relation": "unknown",
         "landmark": None,
