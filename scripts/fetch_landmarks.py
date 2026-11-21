@@ -46,14 +46,16 @@ def main() -> None:
     q = f'[out:json][timeout:90];way["highway"]["name"](around:{RADIUS},{LAT},{LON});out geom;'
     for el in query(q):
         name = el["tags"]["name"]
-        streets.setdefault(name, []).extend([g["lat"], g["lon"]] for g in el.get("geometry", []))
+        line = [[g["lat"], g["lon"]] for g in el.get("geometry", [])]
+        if line:
+            streets.setdefault(name, []).append(line)
     print(f"{'streets':12} {len(streets)}")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps({
         "zone": {"lat": LAT, "lon": LON, "radius_m": RADIUS},
         "pois": pois,
-        "streets": [{"name": n, "points": pts} for n, pts in streets.items()],
+        "streets": [{"name": n, "lines": lines} for n, lines in streets.items()],
     }, ensure_ascii=False), encoding="utf-8")
     print(f"Écrit : {OUT}")
 

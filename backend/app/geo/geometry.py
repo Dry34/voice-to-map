@@ -29,11 +29,46 @@ def nearest(ref: Point, points: list[Point]) -> Point | None:
     return min(points, key=lambda p: haversine(ref, p), default=None)
 
 
-def closest_pair(a: list[Point], b: list[Point]) -> tuple[Point, float] | None:
-    """Point milieu des deux sommets les plus proches entre deux géométries."""
+def _segment_intersection(p1: Point, p2: Point, q1: Point, q2: Point) -> Point | None:
+    """Croisement de deux segments (approximation plane, suffisante à l'échelle d'une ville)."""
+    d1 = (p2[0] - p1[0], p2[1] - p1[1])
+    d2 = (q2[0] - q1[0], q2[1] - q1[1])
+    denom = d1[0] * d2[1] - d1[1] * d2[0]
+    if abs(denom) < 1e-15:
+        return None
+    t = ((q1[0] - p1[0]) * d2[1] - (q1[1] - p1[1]) * d2[0]) / denom
+    u = ((q1[0] - p1[0]) * d1[1] - (q1[1] - p1[1]) * d1[0]) / denom
+    if 0 <= t <= 1 and 0 <= u <= 1:
+        return (p1[0] + t * d1[0], p1[1] + t * d1[1])
+    return None
+
+
+Line = list[Point]
+
+
+def crossing(a: list[Line], b: list[Line]) -> Point | None:
+    """Premier point où un tronçon de a croise un tronçon de b, sinon None."""
+    for la in a:
+        for lb in b:
+            for i in range(len(la) - 1):
+                for j in range(len(lb) - 1):
+                    pt = _segment_intersection(la[i], la[i + 1], lb[j], lb[j + 1])
+                    if pt:
+                        return pt
+    return None
+
+
+def closest_pair(a: list[Line], b: list[Line]) -> tuple[Point, float] | None:
+    """Croisement exact si les rues se croisent, sinon milieu des deux sommets les plus proches.
+
+    Renvoie (point, écart en mètres) : 0 pour un vrai croisement.
+    """
+    pt = crossing(a, b)
+    if pt:
+        return pt, 0.0
     best = None
-    for p in a:
-        for q in b:
+    for p in (p for line in a for p in line):
+        for q in (q for line in b for q in line):
             d = haversine(p, q)
             if best is None or d < best[1]:
                 best = (((p[0] + q[0]) / 2, (p[1] + q[1]) / 2), d)

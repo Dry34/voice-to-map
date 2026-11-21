@@ -12,6 +12,7 @@ from .geometry import BEARINGS, DIRECTION_BEARINGS, Point, closest_pair, destina
 UNCERTAINTY_M = {"at": 30, "near": 150, "north_of": 80, "south_of": 80, "east_of": 80,
                  "west_of": 80, "towards": 60, "along": 50, "intersection": 20}
 CARDINAL_OFFSET_M = 120
+NAMED_PLACE_RADIUS_M = 10_000
 DEFAULT_ALONG_M = 100
 
 
@@ -27,8 +28,8 @@ async def locate_landmark(landmark: dict, ref: Point) -> tuple[Point, str, str |
     if kind == "street":
         street = await osm.find_street(name, ref, radius)
         if street:
-            label, points = street
-            return nearest(ref, points), label, None
+            label, lines = street
+            return nearest(ref, [p for line in lines for p in line]), label, None
 
     generic = osm.generic_kind(kind) or osm.generic_kind(name)
     if generic:
@@ -41,12 +42,24 @@ async def locate_landmark(landmark: dict, ref: Point) -> tuple[Point, str, str |
             return (p["lat"], p["lon"]), p["name"], p.get("osm_id")
 
     hit = await osm.nominatim(name, ref, radius)
+    if hit is None:
+        # Un nom propre (« tour Eiffel ») peut être loin de l'unité : on élargit à toute la ville.
+        hit = await osm.nominatim(name, (settings.zone_lat, settings.zone_lon), NAMED_PLACE_RADIUS_M)
     if hit:
         return (hit["lat"], hit["lon"]), hit["name"], hit["osm_id"]
     return None
 
 
 async def resolve(intent: dict, ref: Point, last: Point | None) -> dict | None:
+    """Cherche autour de la dernière position de l'unité, puis autour du centre de la zone."""
+    place = await _resolve_around(intent, ref, last)
+    zone_center = (settings.zone_lat, settings.zone_lon)
+    if place is None and ref != zone_center:
+        place = await _resolve_around(intent, zone_center, last)
+    return place
+
+
+async def _resolve_around(intent: dict, ref: Point, last: Point | None) -> dict | None:
     relation = intent.get("relation")
 
     if relation == "along":
