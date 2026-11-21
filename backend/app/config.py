@@ -14,6 +14,8 @@ load_dotenv(ROOT / ".env")
 class Settings:
     mistral_api_key: str = os.getenv("MISTRAL_API_KEY", "")
     mistral_model: str = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+    stt_model: str = os.getenv("STT_MODEL", "voxtral-mini-latest")
+    stt_language: str = os.getenv("STT_LANGUAGE", "fr")  # fr gère aussi l anglais ; vide = détection auto
     node_mode: str = os.getenv("NODE_MODE", "central")
     db_path: Path = ROOT / os.getenv("DB_PATH", "data/events.db")
     landmarks_path: Path = ROOT / "data" / "landmarks" / "zone.json"
