@@ -1,6 +1,7 @@
 // Assemblage : formulaire, historique, intégrité. Responsable : A.
 
 import { applyEvent, flyTo, initMap, unitColor } from "./map.js";
+import { setupPushToTalk } from "./ptt.js";
 import { connect } from "./socket.js";
 
 const $ = (id) => document.getElementById(id);
@@ -82,6 +83,21 @@ async function main() {
     } finally {
       $("send").disabled = false;
     }
+  });
+
+  const setMsg = (kind, text) => {
+    $("form-msg").className = `msg ${kind}`;
+    $("form-msg").textContent = text;
+  };
+  setupPushToTalk({
+    button: $("ptt"),
+    getUnit: () => $("unit").value,
+    onStatus: setMsg,
+    onEvent: (ev) => {
+      handle(ev, true);
+      setMsg(ev.status === "confirmed" ? "ok" : "",
+        `« ${ev.transcript} » → ${ev.status === "confirmed" ? `placé : ${ev.resolved_landmark || "position"}` : "lieu non trouvé, à confirmer"}`);
+    },
   });
 
   document.querySelectorAll(".sample").forEach((b) => {

@@ -37,6 +37,12 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
 #send:disabled { opacity: .6; cursor: wait; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+.ptt { background: var(--bg); color: var(--ink); border: 2px solid var(--accent); padding: 18px 8px; font-weight: 600; font-size: 1rem; touch-action: none; user-select: none; -webkit-user-select: none; margin-top: 6px; }
+.ptt:hover { background: var(--panel); }
+.ptt.recording { background: var(--accent); color: #fff; }
+.ptt:disabled { opacity: .6; cursor: wait; }
+.hint { margin: 0 0 6px; font: 11px var(--mono); color: var(--muted); text-align: center; }
+
 .samples { display: flex; flex-wrap: wrap; gap: 6px; }
 .samples .label { width: 100%; }
 .sample { background: transparent; color: var(--ink); border: 1px solid var(--line); padding: 4px 8px; font-size: 12px; font-style: italic; }

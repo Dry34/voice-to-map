@@ -25,7 +25,9 @@
       <form id="report-form" class="report">
         <label for="unit">Unité</label>
         <input id="unit" name="unit" value="ALPHA 2" autocomplete="off">
-        <label for="text">Annonce</label>
+        <button type="button" id="ptt" class="ptt">Maintenir pour parler</button>
+        <p class="hint">ou maintenir la barre espace, hors des champs de saisie</p>
+        <label for="text">Annonce écrite</label>
         <textarea id="text" name="text" rows="2" placeholder="I am south of the church." required></textarea>
         <button type="submit" id="send">Envoyer</button>
         <p id="form-msg" class="msg" role="status"></p>
