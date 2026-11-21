@@ -5,13 +5,17 @@
 // toutes les unités, la sienne mise en avant. Le poste de commandement voit tout sans unité.
 
 import * as identity from "./identity.js";
-import { applyEvent, flyTo, initMap, setKillHandler, setOwnUnit, unitColor } from "./map.js";
+import { applyEvent, flyTo, initMap, setKillHandler, setOwnUnit, setUnitColors, squadBox, unitColor } from "./map.js";
 import { setupPushToTalk } from "./ptt.js";
 import { connect } from "./socket.js";
 
 const $ = (id) => document.getElementById(id);
 const seen = new Set();
 let me = null; // identité de cet onglet : {unit, privateKey, publicKey}
+let announcePresence = () => {}; // branché sur le WebSocket dans main()
+let simListener = () => {};
+let groups = {};       // {"G1": ["ALPHA 1", "TOM 2"]}
+let squadEl = null;    // encart en haut à gauche de la carte
 const PC_KEY = "vtm-pc";
 const pcMode = {
   get: () => { try { return sessionStorage.getItem(PC_KEY) === "1"; } catch { return false; } },
@@ -31,9 +35,12 @@ function describe(ev) {
 }
 
 function addToHistory(ev) {
+  if (ev.intent?.sim) return; // étapes de la simulation : pas dans l'historique
   // Groupe d'ennemis (« 5 ennemis à… ») : une seule ligne dans l'historique, pour le premier.
   const group = ev.intent?.group_ids;
   if (group && ev.intent.enemy_id !== group[0]) return;
+  const killed = ev.intent?.kill_ids; // plusieurs ennemis neutralisés par la même annonce
+  if (killed && ev.intent.enemy_id !== killed[0]) return;
   const li = document.createElement("li");
   li.className = "event";
   li.style.setProperty("--unit-color", unitColor(ev.unit));
@@ -51,10 +58,23 @@ function addToHistory(ev) {
     return;
   }
   if (ev.status === "enemy_down") {
+    li.querySelector(".meta .badge.enemy")?.remove();
     const b = li.querySelector(".meta .badge");
     b.className = "badge down";
-    b.textContent = `${ev.intent?.enemy_id} neutralisé`;
+    b.textContent = killed ? `${killed.join(", ")} neutralisés` : `${ev.intent?.enemy_id} neutralisé`;
     li.querySelector(".text").textContent = `« ${ev.transcript} »`;
+    li.querySelector(".res").remove();
+    $("events").appendChild(li);
+    return;
+  }
+  if (ev.status === "group") {
+    const i = ev.intent || {};
+    const b = li.querySelector(".meta .badge");
+    b.className = "badge group";
+    b.textContent = i.type === "group_join" ? `escouade ${i.group_id}` : `quitte ${i.group_id}`;
+    li.querySelector(".text").textContent = i.type === "group_join"
+      ? `${ev.unit} forme l'escouade ${i.group_id} avec ${(i.members || []).filter((m) => m !== ev.unit).join(", ")}.`
+      : `${ev.unit} quitte l'escouade ${i.group_id}.`;
     li.querySelector(".res").remove();
     $("events").appendChild(li);
     return;
@@ -67,7 +87,9 @@ function addToHistory(ev) {
     return;
   }
   li.querySelector(".text").textContent = `« ${ev.transcript} »`;
-  li.querySelector(".res").textContent = describe(ev) + (ev.intent?.callsign_ignored ? ` · indicatif « ${ev.intent.callsign} » ignoré` : "");
+  li.querySelector(".res").textContent = describe(ev)
+    + (ev.intent?.callsign_ignored ? ` · indicatif « ${ev.intent.callsign} » ignoré` : "")
+    + (ev.intent?.moved_by ? ` · déplacé avec ${ev.intent.moved_by}` : "");
   li.onclick = () => flyTo(ev);
   $("events").appendChild(li);
 }
@@ -75,11 +97,71 @@ function addToHistory(ev) {
 function handle(ev, live) {
   if (seen.has(ev.id)) return;
   seen.add(ev.id);
+  if (live && ["group", "left", "cleared"].includes(ev.status)) refreshGroups();
   // On ne recentre la carte que sur sa propre unité (ou sur tout le monde au poste de commandement).
   // Un ennemi signalé recentre tout le monde ; une position, seulement le terminal concerné.
   const enemy = ev.intent?.subject === "enemy";
   applyEvent(ev, { focus: live && (enemy || !me || ev.unit === me.unit) });
   addToHistory(ev);
+}
+
+/** Une annonce peut contenir plusieurs faits (ev.also) : on les applique tous et on les résume. */
+function applyAll(ev) {
+  const all = [ev, ...(ev.also || [])];
+  all.forEach((e) => handle(e, true));
+  return all.map((e) => {
+    const i = e.intent || {};
+    if (e.status === "group") return i.type === "group_join" ? `escouade ${i.group_id} : ${(i.members || []).join(", ")}` : `quitte ${i.group_id}`;
+    if (e.status === "enemy_down") return `${(i.kill_ids || [i.enemy_id]).join(", ")} neutralisé${i.kill_ids ? "s" : ""}`;
+    if (e.status !== "confirmed") return "lieu non trouvé, à confirmer";
+    if (i.subject === "enemy") return `${i.group_ids ? `${i.group_ids.length} ennemis` : i.enemy_id} : ${e.resolved_landmark}`;
+    return e.intent?.moved_by ? `${e.unit} aussi` : `placé : ${e.resolved_landmark || "position"}`;
+  }).join(" · ");
+}
+
+// --- Escouade : encart en haut à gauche de la carte ------------------------
+
+async function refreshGroups() {
+  try { groups = await (await fetch("/api/groups")).json(); } catch { return; }
+  renderSquad();
+}
+
+function renderSquad() {
+  if (!squadEl) return;
+  squadEl.replaceChildren();
+  const mine = me && Object.entries(groups).find(([, ms]) => ms.includes(me.unit));
+  const shown = me ? (mine ? [mine] : []) : (pcMode.get() ? Object.entries(groups) : []);
+  squadEl.hidden = shown.length === 0;
+  for (const [gid, members] of shown) {
+    const title = document.createElement("div");
+    title.className = "squad-title";
+    title.textContent = mine ? `Escouade ${gid} · vous êtes relié` : `Escouade ${gid}`;
+    const list = document.createElement("div");
+    list.className = "squad-members";
+    for (const m of members) {
+      const chip = document.createElement("span");
+      chip.className = `squad-chip${me && m === me.unit ? " me" : ""}`;
+      chip.style.setProperty("--unit-color", unitColor(m));
+      chip.textContent = m;
+      list.append(chip);
+    }
+    squadEl.append(title, list);
+  }
+  if (mine) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "link";
+    btn.textContent = "Quitter l'escouade";
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try { await identity.leaveGroup(me); } catch (err) { btn.textContent = err.message; }
+    };
+    squadEl.append(btn);
+  }
+}
+
+async function refreshColors() {
+  try { setUnitColors(await (await fetch("/api/units")).json()); renderSquad(); } catch { /* pas grave */ }
 }
 
 async function refreshTaken() {
@@ -101,6 +183,8 @@ function render() {
   $("release").hidden = pc;
   $("leave").hidden = !pc;
   setOwnUnit(me?.unit || null);
+  announcePresence();
+  renderSquad();
   // Seul un terminal qui tient une unité peut neutraliser (l'action est signée par sa clé).
   setKillHandler(me ? (id) => identity.killEnemy(me, id) : null);
   if (!me && !pc) refreshTaken();
@@ -110,6 +194,9 @@ async function main() {
   const config = await (await fetch("/api/config")).json();
   $("node").textContent = `${config.node_mode} · ${config.llm} · ${config.zone_name}`;
   initMap(config.center);
+  await refreshColors(); // avant de rejouer l'historique : les tracés prennent tout de suite la bonne couleur
+  squadEl = squadBox();
+  refreshGroups();
 
   if (!(await identity.supported())) {
     $("claim-msg").className = "msg err";
@@ -120,7 +207,8 @@ async function main() {
   // Unités remises à zéro côté serveur (scripts/clear_units.py) : l'onglet repasse au choix d'unité.
   if (me) {
     const taken = await (await fetch("/api/units")).json().catch(() => []);
-    if (!taken.some((u) => u.unit === me.unit)) { identity.leave(); me = null; }
+    // Unité libérée, ou reprise par un autre terminal (autre clé) : on repasse au choix.
+    if (!taken.some((u) => u.unit === me.unit && u.public_key === me.publicKey)) { identity.leave(); me = null; }
   }
   render();
 
@@ -157,7 +245,11 @@ async function main() {
     }
   };
 
-  connect({
+  // Dire au serveur quelle unité cet onglet tient : tant qu'il est connecté, personne ne peut la reprendre.
+  let socket = null;
+  announcePresence = () => socket?.send({ type: "presence", unit: me?.unit || null });
+  socket = connect({
+    onOpen: () => announcePresence(),
     onStatus: (up) => {
       $("conn").className = `dot ${up ? "on" : "off"}`;
       $("conn-label").textContent = up ? "Connecté" : "Déconnecté";
@@ -165,6 +257,16 @@ async function main() {
     onMessage: (msg) => {
       if (msg.type === "snapshot") msg.events.forEach((ev) => handle(ev, false));
       if (msg.type === "event") handle(msg.event, true);
+      if (msg.type === "sim") simListener(msg.on);
+      if (msg.type === "units") refreshColors();
+      if (msg.type === "unit_owner" && me && msg.unit === me.unit && msg.public_key !== me.publicKey) {
+        const lost = me.unit;
+        identity.leave();
+        me = null;
+        render();
+        $("claim-msg").className = "msg err";
+        $("claim-msg").textContent = `${lost} a été reprise par un autre terminal.`;
+      }
     },
   });
 
@@ -177,10 +279,7 @@ async function main() {
     $("form-msg").textContent = "Analyse en cours…";
     try {
       const ev = await identity.sendText(me, text);
-      handle(ev, true);
-      $("form-msg").textContent = ev.status === "confirmed"
-        ? `Placé : ${ev.resolved_landmark || "position"}`
-        : "Lieu non trouvé, annonce à confirmer.";
+      $("form-msg").textContent = applyAll(ev);
       $("text").value = "";
     } catch (err) {
       $("form-msg").className = "msg err";
@@ -198,16 +297,26 @@ async function main() {
     button: $("ptt"),
     upload: (blob, filename) => identity.sendAudio(me, blob, filename),
     onStatus: setMsg,
-    onEvent: (ev) => {
-      handle(ev, true);
-      setMsg(ev.status === "confirmed" ? "ok" : "",
-        `« ${ev.transcript} » → ${ev.status === "confirmed" ? `placé : ${ev.resolved_landmark || "position"}` : "lieu non trouvé, à confirmer"}`);
-    },
+    onEvent: (ev) => setMsg(ev.status === "pending_review" && !ev.also ? "" : "ok", `« ${ev.transcript} » → ${applyAll(ev)}`),
   });
 
   document.querySelectorAll(".sample").forEach((b) => {
     b.onclick = () => { $("text").value = b.textContent; $("text").focus(); };
   });
+
+  // Simulation : les ennemis actifs marchent tout seuls dans les rues.
+  const showSim = (on) => {
+    $("sim").textContent = on ? "Simulation ennemis : en marche" : "Simulation ennemis : arrêtée";
+    $("sim").classList.toggle("on", on);
+    $("sim").dataset.on = on ? "1" : "";
+  };
+  showSim(config.sim);
+  $("sim").onclick = async () => {
+    const r = await fetch("/api/sim", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: !$("sim").dataset.on }) });
+    if (r.ok) showSim((await r.json()).on);
+  };
+  simListener = showSim;
 
   $("verify").onclick = async () => {
     const r = await (await fetch("/api/integrity")).json();

@@ -63,6 +63,13 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
 .enemy-popup .quote { font-style: italic; color: #555; }
 .enemy-popup .kill { margin-top: 4px; background: #e5484d; color: #fff; border: 0; padding: 6px 10px; font-weight: 600; }
 .enemy-cluster { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #e5484d; color: #fff; border: 3px solid #fff; font: 700 13px var(--mono); box-shadow: 0 0 0 4px rgba(229, 72, 77, .35); }
+.squad-box { background: var(--panel); color: var(--ink); border: 1px solid var(--accent); border-radius: 6px; padding: 8px 10px; display: grid; gap: 6px; min-width: 180px; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+.squad-title { font: 600 12px var(--mono); }
+.squad-members { display: flex; flex-wrap: wrap; gap: 4px; }
+.squad-chip { font: 11px var(--mono); padding: 2px 6px; border-radius: 999px; border: 1px solid var(--unit-color, var(--line)); }
+.squad-chip.me { background: var(--accent); border-color: var(--accent); color: #fff; }
+.squad-box .link { justify-self: start; padding: 0; }
+.badge.group { color: var(--accent); border: 1px solid var(--accent); }
 .badge.down { color: #fff; background: #6b7680; border: 1px solid #6b7680; }
 .badge.enemy { color: #fff; background: #e5484d; border: 1px solid #e5484d; }
 .unit-label.own { background: var(--accent); color: #fff; font-weight: 600; }
@@ -72,6 +79,8 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
 .sample { background: transparent; color: var(--ink); border: 1px solid var(--line); padding: 4px 8px; font-size: 12px; font-style: italic; }
 .sample:hover { border-color: var(--accent); }
 
+.sim { background: transparent; color: var(--muted); border: 1px dashed var(--line); padding: 8px; font: 12px var(--mono); }
+.sim.on { color: #fff; background: #e5484d; border: 1px solid #e5484d; }
 .history-head { display: flex; justify-content: space-between; align-items: center; }
 #verify { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 4px 8px; font-size: 12px; }
 .msg { margin: 0; font: 12px var(--mono); color: var(--muted); min-height: 1em; }

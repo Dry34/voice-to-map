@@ -119,3 +119,7 @@ export async function sendAudio(identity, blob, filename) {
 export async function killEnemy(identity, enemyId) {
   return postJson("/api/enemies/kill", { ...(await signWith(identity, "kill", enemyId)), enemy_id: enemyId });
 }
+
+export async function leaveGroup(identity) {
+  return postJson("/api/groups/leave", await signWith(identity, "group_leave", ""));
+}
