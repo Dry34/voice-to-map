@@ -4,82 +4,167 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Voice-to-Map</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css">
-  <link rel="stylesheet" href="css/style.css">
+  <meta name="description" content="Les unités annoncent leur position à la voix, la carte partagée se met à jour en quelques secondes.">
+  <script>
+    // Thème appliqué avant l'affichage, pour éviter un flash de la mauvaise couleur.
+    var t = new URLSearchParams(location.search).get("theme");
+    try { t = t || localStorage.getItem("vtm-theme"); } catch (e) {}
+    document.documentElement.dataset.theme = t || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="css/landing.css">
 </head>
 <body>
-  <main class="layout">
-    <div id="map" class="map"></div>
+  <header class="site-header">
+    <a class="brand" href="./" data-i18n-attr="aria-label:nav.home">
+      <svg class="brand-mark" viewBox="0 0 40 28" aria-hidden="true">
+        <rect x="1.5" y="1.5" width="37" height="25" rx="1" fill="none" stroke="currentColor" stroke-width="3"/>
+        <path d="M8 14 h3 M13 9 v10 M17 6 v16 M21 10 v8 M25 7 v14 M29 11 v6 M32 14 h1" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+      </svg>
+      <span>Voice-to-Map</span>
+    </a>
+    <nav class="site-nav" data-i18n-attr="aria-label:nav.label">
+      <a href="#fonctionnement" data-i18n="nav.how">Fonctionnement</a>
+      <a href="#phrases" data-i18n="nav.phrases">Ce qu'elle comprend</a>
+      <a href="#securite" data-i18n="nav.security">Sécurité</a>
+    </nav>
+    <div class="prefs">
+      <button type="button" class="icon-button flag" id="lang-toggle"></button>
+      <button type="button" class="icon-button" id="theme-toggle"></button>
+    </div>
+    <a class="button button-primary" href="app.html" data-i18n="cta.open">Ouvrir la carte</a>
+  </header>
 
-    <aside class="panel">
-      <header class="panel-head">
-        <h1>Voice-to-Map</h1>
-        <div class="status">
-          <span id="conn" class="dot off" title="Connexion"></span>
-          <span id="conn-label">Déconnecté</span>
-          <span class="sep">·</span>
-          <span id="node">—</span>
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <h1 data-i18n-html="hero.title">Dites où vous êtes.<br>La carte suit.</h1>
+        <p class="lede" data-i18n="hero.lede">Chaque unité annonce sa position à la radio, en français ou en anglais.
+          En quelques secondes, son symbole bouge sur la carte que toute l'équipe partage,
+          avec l'heure, le trajet et la marge d'erreur.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="app.html" data-i18n="cta.open">Ouvrir la carte</a>
+          <a class="button button-quiet" href="#fonctionnement" data-i18n="hero.how">Voir comment ça marche</a>
         </div>
-      </header>
+      </div>
 
-      <section id="claim-view" class="identity" hidden>
-        <label for="unit" class="label">Quelle unité ce terminal gère-t-il ?</label>
-        <div class="row">
-          <input id="unit" name="unit" placeholder="ALPHA 1" autocomplete="off">
-          <button type="button" id="claim">Prendre</button>
-        </div>
-        <p id="claim-msg" class="msg" role="status"></p>
-        <p id="taken" class="hint left"></p>
-        <button type="button" id="pc-mode" class="link">Poste de commandement : voir sans unité</button>
-      </section>
+      <figure class="demo" data-i18n-attr="aria-label:demo.label">
+        <svg class="demo-map" viewBox="0 0 520 360" role="img" aria-hidden="true">
+          <defs>
+            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+              <path d="M40 0H0V40" fill="none" class="grid-line"/>
+            </pattern>
+          </defs>
+          <rect width="520" height="360" fill="url(#grid)"/>
+          <path class="river" d="M-10 300 C 120 250, 210 330, 330 270 S 470 230, 540 250"/>
+          <g class="streets">
+            <path d="M60 0 L 110 360"/><path d="M0 120 L 520 90"/><path d="M230 0 L 260 360"/>
+            <path d="M380 0 L 400 250"/><path d="M0 210 L 520 190"/><path d="M110 40 L 470 330"/>
+          </g>
+          <g class="landmark" transform="translate(248 112)">
+            <path d="M0 -12 V12 M-8 -4 H8"/>
+          </g>
+          <text class="landmark-label" x="262" y="104" data-i18n="demo.church">Église</text>
+          <g class="bridge"><path d="M300 262 L 318 300"/><path d="M314 258 L 332 296"/></g>
+          <text class="landmark-label" x="336" y="286" data-i18n="demo.bridge">Pont</text>
 
-      <section id="me-view" class="identity me" hidden>
+          <path class="track" id="track" d="M110 70 C 160 80, 200 120, 252 172"/>
+          <circle class="uncertainty" id="unc" cx="252" cy="172" r="0"/>
+          <g class="unit" id="unit" transform="translate(110 70)">
+            <rect x="-15" y="-10" width="30" height="20"/>
+            <path d="M-15 -10 L15 10 M15 -10 L-15 10"/>
+          </g>
+          <text class="unit-label" id="unit-label" x="0" y="0">ALPHA 1</text>
+          <g class="hostiles" id="hostiles">
+            <path d="M310 228 l9 -9 l9 9 l-9 9z"/><path d="M332 220 l9 -9 l9 9 l-9 9z"/><path d="M322 244 l9 -9 l9 9 l-9 9z"/>
+          </g>
+        </svg>
+        <figcaption class="demo-transcript">
+          <span class="speaker" id="speaker">ALPHA 1</span>
+          <span class="said" id="said" aria-live="polite"></span>
+        </figcaption>
+        <button type="button" class="replay" id="replay" data-i18n="demo.replay">Rejouer la démo</button>
+      </figure>
+    </section>
+
+    <section class="steps" id="fonctionnement">
+      <h2 data-i18n="steps.title">De la voix au point sur la carte</h2>
+      <ol class="step-list">
+        <li>
+          <h3 data-i18n="steps.1.t">Parler</h3>
+          <p data-i18n="steps.1.p">On maintient le bouton (ou la barre espace) et on fait son annonce, comme à la radio.</p>
+        </li>
+        <li>
+          <h3 data-i18n="steps.2.t">Comprendre</h3>
+          <p data-i18n="steps.2.p">La phrase est transcrite, puis analysée : qui parle, où il est, ce qu'il voit, ce qu'il a neutralisé.</p>
+        </li>
+        <li>
+          <h3 data-i18n="steps.3.t">Placer</h3>
+          <p data-i18n="steps.3.p">Le lieu est retrouvé dans OpenStreetMap, avec un rayon d'incertitude et le trajet par les rues.</p>
+        </li>
+        <li>
+          <h3 data-i18n="steps.4.t">Partager</h3>
+          <p data-i18n="steps.4.p">Tous les écrans reçoivent la mise à jour en direct. Chaque annonce reste dans un historique horodaté.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="phrases" id="phrases">
+      <h2 data-i18n="phrases.title">Ce que la carte comprend</h2>
+      <p class="section-lede" data-i18n="phrases.lede">Le langage de tous les jours, pas des coordonnées.</p>
+      <table class="phrase-table">
+        <thead>
+          <tr><th scope="col" data-i18n="phrases.say">On dit</th><th scope="col" data-i18n="phrases.map">La carte</th></tr>
+        </thead>
+        <tbody>
+          <tr><td data-i18n="p1.s">« Je suis au sud de l'église. »</td><td data-i18n="p1.m">place l'unité 120 m au sud de l'église la plus proche</td></tr>
+          <tr><td data-i18n="p2.s">« Je suis la route et je tourne à droite au prochain bloc. »</td><td data-i18n="p2.m">avance d'un pâté de maisons dans le sens de marche, puis tourne</td></tr>
+          <tr><td data-i18n="p3.s">« Contact, cinq ennemis près de l'Hôtel-Dieu. »</td><td data-i18n="p3.m">pose cinq hostiles numérotés dans la rue la plus proche</td></tr>
+          <tr><td data-i18n="p4.s">« Ennemi à 6h, 100 mètres. »</td><td data-i18n="p4.m">place l'hostile derrière l'unité, d'après son sens de marche</td></tr>
+          <tr><td data-i18n="p5.s">« Moi et Tom 2, on est en groupe. »</td><td data-i18n="p5.m">forme une escouade qui se déplace ensemble</td></tr>
+          <tr><td data-i18n="p6.s">« J'ai éliminé les ennemis autour de moi. »</td><td data-i18n="p6.m">marque comme neutralisés tous les hostiles à moins de 300 m</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="security" id="securite">
+      <h2 data-i18n="sec.title">Une carte à laquelle on peut se fier</h2>
+      <div class="security-grid">
         <div>
-          <span class="label" id="me-label">Ce terminal gère</span>
-          <strong id="me" class="me-unit"></strong>
+          <h3 data-i18n="sec.1.t">Un terminal, une unité</h3>
+          <p data-i18n="sec.1.p">Chaque navigateur crée sa propre clé et signe ses annonces. Personne ne peut parler à la place d'ALPHA 1 depuis un autre terminal.</p>
         </div>
-        <div class="row">
-          <button type="button" id="leave" class="link">Prendre une unité</button>
-          <button type="button" id="release" class="link">Quitter l'unité</button>
+        <div>
+          <h3 data-i18n="sec.2.t">Un historique qui ne s'efface pas</h3>
+          <p data-i18n="sec.2.p">Chaque événement est chaîné au précédent. Une modification après coup casse la chaîne, et le bouton de vérification le montre.</p>
         </div>
-      </section>
-
-      <form id="report-form" class="report" hidden>
-        <button type="button" id="ptt" class="ptt">Maintenir pour parler</button>
-        <p class="hint">ou maintenir la barre espace, hors des champs de saisie</p>
-        <label for="text">Annonce écrite</label>
-        <textarea id="text" name="text" rows="2" placeholder="I am south of the church." required></textarea>
-        <button type="submit" id="send">Envoyer</button>
-        <p id="form-msg" class="msg" role="status"></p>
-      </form>
-
-      <div class="samples" id="samples" hidden>
-        <span class="label">Exemples</span>
-        <button type="button" class="sample">I am at Notre-Dame.</button>
-        <button type="button" class="sample">I am south of the church.</button>
-        <button type="button" class="sample">I moved towards rue de Rivoli.</button>
-        <button type="button" class="sample">Moving north along rue Saint-Denis, about 200 meters.</button>
-        <button type="button" class="sample">Contact, trois ennemis au nord de l'église.</button>
-        <button type="button" class="sample">Ennemi à 200 mètres au nord-est.</button>
-        <button type="button" class="sample">Je veux aller vers Bravo 2.</button>
-        <button type="button" class="sample">E1 au sud du pont.</button>
-        <button type="button" class="sample">E1 neutralisé.</button>
+        <div>
+          <h3 data-i18n="sec.3.t">L'incertitude affichée</h3>
+          <p data-i18n="sec.3.p">Une annonce floue n'est pas placée au hasard : elle reste à confirmer, et chaque point porte sa marge d'erreur.</p>
+        </div>
       </div>
+    </section>
 
-      <button type="button" id="sim" class="sim" hidden>Simulation ennemis : arrêtée</button>
-
-      <div class="history-head">
-        <h2>Historique</h2>
-        <button type="button" id="verify">Vérifier l'intégrité</button>
-      </div>
-      <p id="integrity" class="msg" role="status"></p>
-      <ol id="events" class="events"></ol>
-    </aside>
+    <section class="cta">
+      <h2 data-i18n="cta.title">Prenez une unité et faites votre première annonce.</h2>
+      <a class="button button-primary button-large" href="app.html" data-i18n="cta.open">Ouvrir la carte</a>
+    </section>
   </main>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
-  <script type="module" src="js/app.js"></script>
+  <footer class="site-footer">
+    <div class="footer-brand">
+      <svg class="brand-mark" viewBox="0 0 40 28" aria-hidden="true">
+        <rect x="1.5" y="1.5" width="37" height="25" rx="1" fill="none" stroke="currentColor" stroke-width="3"/>
+        <path d="M8 14 h3 M13 9 v10 M17 6 v16 M21 10 v8 M25 7 v14 M29 11 v6 M32 14 h1" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+      </svg>
+      <p data-i18n="foot.about">Voice-to-Map, challenge Lysk du hackathon EDTH Paris, novembre 2026.</p>
+    </div>
+    <p class="footer-team" data-i18n="foot.team">Réalisé par Thibaut, Tom, Kenzo et Joan.</p>
+    <p class="footer-credits" data-i18n="foot.credits">Fond de carte et lieux : contributeurs OpenStreetMap. Transcription et analyse : Mistral.</p>
+  </footer>
+
+  <script type="module" src="js/landing.js"></script>
 </body>
 </html>
