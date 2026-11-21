@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field
 from .. import sim
 from ..config import settings
 from ..intent.rules import normalize_callsign
-from ..pipeline import UnknownEnemy, confirm_pending, kill_enemy, leave_group, process_report
+from ..pipeline import (UnknownEnemy, clear_alert, confirm_pending, kill_enemy, leave_group, process_report,
+                        raise_alert)
 from ..security.signing import SignatureError, verify_request
 from ..speech.stt import TranscriptionError, transcribe
 from ..state import hub, journal, units
@@ -145,6 +146,24 @@ async def post_confirm(body: ConfirmIn) -> dict:
         return await confirm_pending(unit, body.seq, f"{unit} confirme l'annonce #{body.seq}", signed=signed)
     except UnknownEnemy as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/api/alerts")
+async def post_alert(body: Signed) -> dict:
+    """Bouton « Demander du renfort » (signé) : prévient les unités proches."""
+    unit = clean_unit(body.unit)
+    signed = check_signed("sos", unit, body.ts, body.nonce, body.signature, b"")
+    try:
+        return await raise_alert(unit, f"{unit} demande du renfort", signed=signed)
+    except UnknownEnemy as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/api/alerts/clear")
+async def post_alert_clear(body: Signed) -> dict:
+    unit = clean_unit(body.unit)
+    signed = check_signed("sos_clear", unit, body.ts, body.nonce, body.signature, b"")
+    return await clear_alert(unit, f"{unit} : situation sécurisée", signed=signed)
 
 
 @router.get("/api/groups")
