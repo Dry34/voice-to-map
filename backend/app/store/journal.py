@@ -258,6 +258,21 @@ class Journal:
         rows = self._conn.execute("SELECT * FROM events WHERE seq >= ? ORDER BY seq", (self.last_clear(),))
         return [_to_event(r) for r in rows]
 
+    def get(self, seq: int) -> dict | None:
+        row = self._conn.execute("SELECT * FROM events WHERE seq = ?", (seq,)).fetchone()
+        return _to_event(row) if row else None
+
+    def confirmable(self, unit: str) -> list[dict]:
+        """Annonces « à confirmer » de l'unité, avec un lieu trouvé, pas encore confirmées (récentes d'abord)."""
+        rows = self._conn.execute(
+            "SELECT * FROM events WHERE unit = ? AND seq > ? AND status = 'pending_review' AND lat IS NOT NULL "
+            "AND seq NOT IN (SELECT json_extract(intent_json, '$.confirmed_from') FROM events "
+            "                WHERE json_extract(intent_json, '$.confirmed_from') IS NOT NULL) "
+            "ORDER BY seq DESC",
+            (unit, self.last_clear()),
+        )
+        return [_to_event(r) for r in rows]
+
     def last_clear(self) -> int:
         """seq de la dernière remise à zéro de la carte (0 si jamais)."""
         return self._conn.execute(

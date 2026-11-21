@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from .. import sim
 from ..config import settings
 from ..intent.rules import normalize_callsign
-from ..pipeline import UnknownEnemy, kill_enemy, leave_group, process_report
+from ..pipeline import UnknownEnemy, confirm_pending, kill_enemy, leave_group, process_report
 from ..security.signing import SignatureError, verify_request
 from ..speech.stt import TranscriptionError, transcribe
 from ..state import hub, journal, units
@@ -130,6 +130,21 @@ async def release_unit(body: Signed) -> dict:
 
 class KillIn(Signed):
     enemy_id: str = Field(pattern=r"^E\d{1,4}$")
+
+
+class ConfirmIn(Signed):
+    seq: int
+
+
+@router.post("/api/reports/confirm")
+async def post_confirm(body: ConfirmIn) -> dict:
+    """Bouton « Confirmer » sur une annonce à confirmer (signé par le terminal de l'unité)."""
+    unit = clean_unit(body.unit)
+    signed = check_signed("confirm", unit, body.ts, body.nonce, body.signature, str(body.seq).encode("utf-8"))
+    try:
+        return await confirm_pending(unit, body.seq, f"{unit} confirme l'annonce #{body.seq}", signed=signed)
+    except UnknownEnemy as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/api/groups")
