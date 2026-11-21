@@ -16,7 +16,7 @@ python3 -m venv .venv
 .venv/bin/uvicorn app.main:app --reload
 ```
 
-Ouvrir http://localhost:8000. Le backend sert aussi le front.
+Ouvrir http://localhost:8000 (page d'accueil), puis « Ouvrir la carte » (http://localhost:8000/app.html). Le backend sert aussi le front.
 
 Sans clé Mistral, l'analyse passe par les règles de `backend/app/intent/rules.py`. Le bandeau en haut du panneau indique le moteur utilisé (`mistral` ou `rules`).
 
@@ -54,7 +54,9 @@ voice-to-map/
 │   ├── tests/
 │   └── requirements.txt
 ├── frontend/                   carte Leaflet, sans build               [A]
-│   ├── index.html
+│   ├── index.html              page d'accueil (démo animée, fonctionnement, sécurité)
+│   ├── app.html                la carte
+│   ├── js/prefs.js             langue FR/EN et thème clair/sombre (accueil et carte)
 │   ├── css/style.css
 │   └── js/
 │       ├── app.js              formulaire, historique, intégrité
@@ -93,6 +95,9 @@ voice-to-map/
 - Escouades : « Moi et Tom 2, on est en groupe » ; quand l'un bouge, l'escouade suit (6 m d'écart). « Je quitte le groupe » ou le bouton dans l'encart en haut à gauche.
 - Déplacements tracés par les rues (itinéraire piéton OSRM). « Je marche 60 m vers le sud ». Horaire militaire : « ennemi à 6h, 100 m » (12h = sens de marche).
 - Une couleur par unité, attribuée par le serveur. Une unité dont l'onglet a planté peut être reprise après 20 s.
+- Flèche de direction par unité (sens de marche, « je regarde à 3h »). Navigation relative : « je suis la route et tourne à droite au prochain bloc ». Ennemis « sur le chemin » répartis le long du trajet.
+- Page d'accueil, interface en français et en anglais (drapeau), mode clair et sombre (soleil / lune). Liens directs : `?lang=en`, `?theme=dark`.
+- La remise à zéro vide aussi l'historique affiché ; « Effacer (local) » ne vide que son propre écran.
 - Remise à zéro de la carte (unités et ennemis, l'historique reste) : `backend/.venv/bin/python scripts/clear_map.py`.
 
 - Push-to-talk : maintenir le bouton (ou la barre espace), parler, relâcher. L'audio part à Voxtral (`STT_MODEL`, `STT_LANGUAGE=fr`, qui comprend aussi l'anglais), puis suit le même chemin qu'une annonce tapée.

@@ -91,6 +91,13 @@ def parse(text: str) -> dict:
     low = text.lower()
     m = CLOCK.search(low)
     out["clock"] = None
+    facing = re.search(r"\b(je regarde|on regarde|je me tourne|on se tourne|face (?:au|à l')|i(?:'m| am) facing|facing)\b", low)
+    if facing:
+        h = int(m.group(1)) if m and m.group(1) else (12 if m else None)
+        d = re.search(r"\b(nord-est|nord-ouest|sud-est|sud-ouest|nord|sud|est|ouest|north|south|east|west)\b", low)
+        out.update(subject="self", type="facing", relation="unknown", landmark=None, clock=h,
+                   direction=OFFSET_DIR.get(d.group(1)) if d and not h else None, confidence=0.8)
+        return out
     if m:
         h = int(m.group(1)) if m.group(1) else 12
         if 1 <= h <= 12:

@@ -16,7 +16,7 @@ MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 
 RELATIONS = {
     "at", "near", "north_of", "south_of", "east_of", "west_of",
-    "towards", "along", "intersection", "offset", "unknown",
+    "towards", "along", "intersection", "offset", "turn", "unknown",
 }
 DIRECTIONS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
 
@@ -34,11 +34,14 @@ where each FACT is:
   "scope": "listed" | "nearest" | "around_me" | "all" | null,   // only for kill: which enemies
   "count": integer | null,            // only for enemy: how many ("trois ennemis" -> 3)
   "description": string | null,       // only for enemy: short French description ("2 hommes armés", "véhicule blindé")
-  "type": "position" | "movement" | "kill" | "group_join" | "group_leave",   // "kill" only for enemy
-  "relation": "at" | "near" | "north_of" | "south_of" | "east_of" | "west_of" | "towards" | "along" | "intersection" | "offset" | "unknown",
+  "on_route": boolean,                // only for enemy: seen ON THE WAY of the unit's move ("sur le chemin", "en route")
+  "type": "position" | "movement" | "kill" | "group_join" | "group_leave" | "facing",   // "kill" only for enemy
+  "relation": "at" | "near" | "north_of" | "south_of" | "east_of" | "west_of" | "towards" | "along" | "intersection" | "offset" | "turn" | "unknown",
   "landmark": {"name": string, "kind": string} | null,
   "landmarks": [string, string],      // only for "intersection": the two street names
   "direction": "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW" | null,   // for "along" and "offset"
+  "turn": "left" | "right" | "straight" | "back" | null,   // only for relation "turn"
+  "blocks": integer | null,           // only for relation "turn": how many blocks before turning (default 1)
   "clock": integer 1-12 | null,       // military clock position ("à 6h", "six heures", "at 3 o'clock") for "offset"
   "distance_m": number | null,
   "confidence": number between 0 and 1
@@ -78,6 +81,21 @@ Rules:
 - MILITARY CLOCK (this is a military tool): "ennemi à 6h", "contact 3 heures 200 mètres", "enemy at 6h00",
   "tango à midi" -> relation "offset", clock 6 / 3 / 6 / 12, direction null, distance_m if said. 12 = straight ahead,
   6 = behind. Never turn a clock position into a compass direction yourself. Confidence high (0.9).
+- "Je vais au lycée Henri IV et sur le chemin j'ai croisé 4 équipes ennemies" -> fact 1: self movement to the lycée;
+  fact 2: enemy, count 4 (one per team), on_route true, landmark null. Where they went afterwards ("une est partie
+  à droite, l'autre à gauche") is unknown: do NOT create facts for it, and never use relation "turn" for enemies.
+- "Je continue vers le sud", "je continue 40 m vers le sud" -> self, relation "offset", direction "S" (put compass
+  words in "direction", never in landmark), distance_m 40 if said.
+- "Je prends la rue de Rivoli et tourne à droite au prochain bloc" -> self, relation "turn", turn "right", blocks 1,
+  landmark {"name": "rue de Rivoli", "kind": "street"}.
+- Street navigation relative to where the unit is heading: "je suis la route et tourne à droite au prochain bloc",
+  "je prends la deuxième à gauche", "je continue tout droit sur 200 m", "demi-tour" -> subject self, type movement,
+  relation "turn", turn right / left / straight / back, blocks 1 / 2 / null, distance_m if said, landmark null.
+  ("je suis la route" = I follow the road, NOT "I am".)
+- Facing: "je regarde à 3h", "on se tourne vers 9 heures", "face au nord", "je regarde vers l'est"
+  -> subject self, type "facing", clock (relative, 1-12) or direction (absolute N/E/S/W…), landmark null.
+- Kill with a clock position: "ennemi éliminé à 4h", "j'ai abattu le tango à midi" -> kill, clock 4 / 12,
+  scope "nearest" (or "all" for "tous les ennemis à 4h").
 - landmark.kind is a generic English noun: "church", "pharmacy", "school", "station", "hospital", "park", "bridge", "street", or "named_place" for a proper name.
 - For a generic landmark ("the church"), name = kind = "church". For a street, kind = "street" and name = the street name as said ("35th Street").
 - "I am south of the church" -> type position, relation south_of.
@@ -104,11 +122,14 @@ def _normalize(raw: dict) -> dict:
         "subject": "enemy" if raw.get("subject") == "enemy" else "self",
         "count": int(raw["count"]) if isinstance(raw.get("count"), (int, float)) and raw["count"] > 0 else None,
         "description": str(raw["description"])[:80] if raw.get("description") else None,
+        "on_route": bool(raw.get("on_route")),
+        "turn": raw.get("turn") if raw.get("turn") in ("left", "right", "straight", "back") else None,
+        "blocks": int(raw["blocks"]) if isinstance(raw.get("blocks"), (int, float)) and 0 < raw["blocks"] <= 10 else None,
         "with_units": [str(x) for x in (raw.get("with_units") or []) if x][:5],
         "enemy_id": _enemy_id(raw.get("enemy_id")),
         "enemy_ids": [e for e in (_enemy_id(x) for x in (raw.get("enemy_ids") or [])) if e][:20],
         "scope": raw.get("scope") if raw.get("scope") in ("listed", "nearest", "around_me", "all") else None,
-        "type": raw.get("type") if raw.get("type") in ("position", "movement", "kill", "group_join", "group_leave") else "position",
+        "type": raw.get("type") if raw.get("type") in ("position", "movement", "kill", "group_join", "group_leave", "facing") else "position",
         "relation": raw.get("relation") if raw.get("relation") in RELATIONS else "unknown",
         "landmark": None,
         "landmarks": [str(x) for x in (raw.get("landmarks") or [])][:2],

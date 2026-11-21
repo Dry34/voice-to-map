@@ -183,3 +183,18 @@ def test_bearing_between():
     from app.geo.geometry import bearing_between
     assert round(bearing_between((48.85, 2.35), (48.86, 2.35))) == 0
     assert round(bearing_between((48.85, 2.35), (48.84, 2.35))) == 180
+
+
+def test_facing_and_clock_kill():
+    i = parse("Je regarde à 3h.")
+    assert (i["type"], i["clock"]) == ("facing", 3)
+    assert parse("On fait face au nord.")["direction"] == "N"
+    i = parse("Ennemi éliminé à 4h00.")
+    assert (i["type"], i["clock"]) == ("kill", 4)
+
+
+def test_direction_in_needs_preposition():
+    from app.pipeline import direction_in
+    assert direction_in("Je continue 40 m vers le sud") == "S"
+    assert direction_in("On part au nord-est") == "NE"
+    assert direction_in("Alpha 1 est aux Invalides") is None

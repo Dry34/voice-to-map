@@ -1,3 +1,7 @@
+import { currentLang } from "./prefs.js";
+
+const tr = (fr, en) => (currentLang() === "en" ? en : fr);
+
 // Push-to-talk : maintenir le bouton (ou la barre espace) pour parler, relâcher pour envoyer.
 // Responsable : A.
 
@@ -6,7 +10,7 @@ const MIN_MS = 400; // en dessous, on considère que c'est un clic accidentel
 export function setupPushToTalk({ button, upload, onStatus, onEvent }) {
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
     button.disabled = true;
-    onStatus("err", "Ce navigateur ne permet pas d'enregistrer le micro. Utilisez Chrome ou Safari.");
+    onStatus("err", tr("Ce navigateur ne permet pas d'enregistrer le micro. Utilisez Chrome ou Safari.", "This browser cannot record the microphone. Use Chrome or Safari."));
     return;
   }
 
@@ -21,7 +25,7 @@ export function setupPushToTalk({ button, upload, onStatus, onEvent }) {
     try {
       stream = stream || (await navigator.mediaDevices.getUserMedia({ audio: true }));
     } catch {
-      onStatus("err", "Accès au micro refusé. Autorisez-le dans les réglages du navigateur.");
+      onStatus("err", tr("Accès au micro refusé. Autorisez-le dans les réglages du navigateur.", "Microphone access denied. Allow it in the browser settings."));
       return;
     }
     chunks = [];
@@ -31,8 +35,8 @@ export function setupPushToTalk({ button, upload, onStatus, onEvent }) {
     recorder.start();
     startedAt = performance.now();
     button.classList.add("recording");
-    button.textContent = "● Enregistrement… relâchez pour envoyer";
-    onStatus("", "Parlez…");
+    button.textContent = tr("● Enregistrement… relâchez pour envoyer", "● Recording… release to send");
+    onStatus("", tr("Parlez…", "Speak…"));
   }
 
   function stop() {
@@ -40,13 +44,13 @@ export function setupPushToTalk({ button, upload, onStatus, onEvent }) {
     recorder.stop();
     recorder = null;
     button.classList.remove("recording");
-    button.textContent = "Maintenir pour parler";
+    button.textContent = tr("Maintenir pour parler", "Hold to talk");
   }
 
   async function send() {
     const duration = performance.now() - startedAt;
     if (duration < MIN_MS) {
-      onStatus("", "Trop court : maintenez le bouton pendant que vous parlez.");
+      onStatus("", tr("Trop court : maintenez le bouton pendant que vous parlez.", "Too short: hold the button while you speak."));
       return;
     }
     const type = chunks[0]?.type || "audio/webm";
@@ -54,11 +58,11 @@ export function setupPushToTalk({ button, upload, onStatus, onEvent }) {
 
     busy = true;
     button.disabled = true;
-    onStatus("", "Transcription et analyse…");
+    onStatus("", tr("Transcription et analyse…", "Transcribing and analysing…"));
     try {
       onEvent(await upload(new Blob(chunks, { type }), `annonce.${ext}`));
     } catch (err) {
-      onStatus("err", `Échec : ${err.message}`);
+      onStatus("err", `${tr("Échec", "Failed")}: ${err.message}`);
     } finally {
       busy = false;
       button.disabled = false;
