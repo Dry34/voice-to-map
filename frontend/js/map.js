@@ -1,3 +1,7 @@
+import { currentLang } from "./prefs.js";
+
+const tr = (fr, en) => (currentLang() === "en" ? en : fr);
+
 // Carte Leaflet : un marqueur, un cercle d'incertitude et un tracé par unité. Responsable : A.
 
 const COLORS = ["#4c9aff", "#3fb950", "#a371f7", "#e3b341", "#39c5cf", "#f778ba",
@@ -20,7 +24,7 @@ function label(marker, text, className) {
 function restyle(unit, u) {
   if (!u.marker) return;
   u.marker.setStyle(styleFor(unit, u.color));
-  label(u.marker, unit === own ? `${unit} (vous)` : unit, `unit-label${unit === own ? " own" : ""}`);
+  label(u.marker, unit === own ? `${unit} ${tr("(vous)", "(you)")}` : unit, `unit-label${unit === own ? " own" : ""}`);
   u.path.setStyle({ weight: unit === own ? 4 : 2, opacity: unit === own ? 1 : 0.7 });
   if (unit === own) u.marker.bringToFront();
 }
@@ -81,6 +85,7 @@ export function setUnitColors(list) {
     if (u.circle) u.circle.setStyle({ color });
     if (u.path) u.path.setStyle({ color });
     restyle(unit, u);
+    drawArrow(u);
   }
 }
 
@@ -126,7 +131,7 @@ export function setKillHandler(fn) {
 
 function enemyText(e, id) {
   const i = e.ev.intent || {};
-  const what = i.description || (i.count ? `${i.count} ennemi${i.count > 1 ? "s" : ""}` : "ennemi");
+  const what = i.description || (i.count ? `${i.count} ${tr(i.count > 1 ? "ennemis" : "ennemi", i.count > 1 ? "hostiles" : "hostile")}` : tr("ennemi", "hostile"));
   const t = new Date(e.ev.ts).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   if (e.down) return `✕ ${id}`;
   // Dans un groupe, étiquette courte pour que les 5 losanges restent lisibles.
@@ -145,7 +150,7 @@ function popupFor(e, id) {
   const title = document.createElement("b");
   title.textContent = enemyText(e, id);
   const who = document.createElement("div");
-  who.textContent = e.down ? `Neutralisé par ${e.downBy}` : `Signalé par ${e.ev.unit}`;
+  who.textContent = e.down ? `${tr("Neutralisé par", "Neutralised by")} ${e.downBy}` : `${tr("Signalé par", "Reported by")} ${e.ev.unit}`;
   const quote = document.createElement("div");
   quote.className = "quote";
   quote.textContent = `« ${e.ev.transcript} »`;
@@ -154,12 +159,12 @@ function popupFor(e, id) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "kill";
-    btn.textContent = `Neutraliser ${id}`;
+    btn.textContent = `${tr("Neutraliser", "Neutralise")} ${id}`;
     btn.onclick = async () => {
       btn.disabled = true;
       btn.textContent = "…";
       try { await killHandler(id); map.closePopup(); }
-      catch (err) { btn.disabled = false; btn.textContent = `Échec : ${err.message}`; }
+      catch (err) { btn.disabled = false; btn.textContent = `${tr("Échec", "Failed")}: ${err.message}`; }
     };
     box.append(btn);
   }
@@ -277,8 +282,8 @@ setInterval(() => enemies.forEach((e, id) => { if (!e.down) refreshEnemy(id); })
 function removeUnit(unit) {
   const u = units.get(unit);
   if (!u) return;
-  for (const layer of [u.marker, u.circle, u.path]) if (layer) layer.remove();
-  Object.assign(u, { marker: null, circle: null, path: null, points: [] });
+  for (const layer of [u.marker, u.circle, u.path, u.arrow]) if (layer) layer.remove();
+  Object.assign(u, { marker: null, circle: null, path: null, arrow: null, heading: null, points: [] });
 }
 
 /** Remise à zéro (scripts/clear_map.py) : plus aucune unité ni aucun ennemi sur la carte. */
@@ -289,8 +294,31 @@ function clearAll() {
   enemies.clear();
 }
 
+// --- Flèche : où regarde chaque unité (sens de marche, ou « je regarde à 3h ») -------
+
+function arrowIcon(u) {
+  return L.divIcon({
+    className: "heading-icon",
+    html: `<div class="heading" style="transform: rotate(${u.heading}deg); --unit-color: ${u.color}"><span></span></div>`,
+    iconSize: [56, 56], iconAnchor: [28, 28],
+  });
+}
+
+function drawArrow(u) {
+  if (u.heading == null || !u.marker) return;
+  const pos = u.marker.getLatLng();
+  if (!u.arrow) u.arrow = L.marker(pos, { icon: arrowIcon(u), interactive: false, keyboard: false }).addTo(map);
+  else u.arrow.setLatLng(pos).setIcon(arrowIcon(u));
+}
+
 export function applyEvent(ev, { focus = false } = {}) {
   if (ev.status === "cleared") { clearAll(); return; }
+  if (ev.status === "facing") {
+    const u = units.get(ev.unit) || (unitColor(ev.unit), units.get(ev.unit));
+    u.heading = ev.intent?.heading_deg ?? u.heading;
+    drawArrow(u);
+    return;
+  }
   if (ev.status === "left") { removeUnit(ev.unit); return; }
   if (ev.status === "enemy_down") { killEnemy(ev); return; }
   if (ev.lat == null || ev.status !== "confirmed") { unitColor(ev.unit); return; }
@@ -312,6 +340,8 @@ export function applyEvent(ev, { focus = false } = {}) {
     u.circle.setLatLng(pos).setRadius(ev.uncertainty_m || 50);
     u.path.setLatLngs(u.points);
   }
+  if (ev.intent?.heading_deg != null) u.heading = ev.intent.heading_deg;
+  drawArrow(u);
   if (focus) map.panTo(pos);
 }
 

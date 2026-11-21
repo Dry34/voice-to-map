@@ -7,21 +7,69 @@
   --accent: #f07a45;
   --ok: #6cc08f;
   --warn: #e0b04e;
-  --font: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font: "Barlow", system-ui, -apple-system, sans-serif;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --friend: #2b63d9;
   --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --header-bg: #141d21;
+  --header-ink: #e2e8e3;
+  --header-soft: #9fb0b4;
+  --header-line: #2a393f;
+  color-scheme: dark;
 }
+
+/* Mode clair : papier de carte, comme la page d'accueil. */
+:root[data-theme="light"] {
+  --bg: #e7ebe4;
+  --panel: #f3f5f1;
+  --ink: #1e2b30;
+  --muted: #5b6a6f;
+  --line: #c7d0c6;
+  --ok: #2f7d50;
+  --warn: #a86f00;
+  --header-bg: #e7ebe4;
+  --header-ink: #1e2b30;
+  --header-soft: #4c5b60;
+  --header-line: #1e2b30;
+  color-scheme: light;
+}
+:root[data-theme="light"] .unit-label:not(.own):not(.enemy) { background: #fff; color: #1e2b30; box-shadow: 0 0 0 1px #c7d0c6; }
+:root[data-theme="light"] .squad-box { box-shadow: 0 2px 10px rgba(30, 43, 48, .15); }
+
+/* Mode sombre : fond de carte OSM inversé (les marqueurs, eux, gardent leurs couleurs). */
+:root[data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.92); }
+:root[data-theme="dark"] .leaflet-container { background: #1a2226; }
+:root[data-theme="dark"] .leaflet-bar a { background: #1d2a2f; color: #e2e8e3; border-color: #2a393f; }
+:root[data-theme="dark"] .leaflet-control-attribution { background: rgba(20, 29, 33, .8); color: #9fb0b4; }
+:root[data-theme="dark"] .leaflet-control-attribution a { color: #9fc1ff; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font); }
 
-.layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; height: 100%; }
+body.app { display: flex; flex-direction: column; }
+.app-header { flex: none; display: flex; align-items: center; gap: 20px; height: 52px; padding: 0 16px;
+  background: var(--header-bg); color: var(--header-ink); border-bottom: 2px solid var(--header-line); }
+.app-header .brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: inherit;
+  font: 700 1.25rem var(--display); }
+.app-header .brand-mark { width: 30px; height: 21px; color: var(--friend); }
+.app-header .status { color: var(--header-soft); font: 500 13px var(--font); }
+.app-header .node { margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--line); }
+.app-header .prefs { display: flex; gap: 6px; margin-left: auto; }
+.icon-button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; cursor: pointer;
+  background: transparent; color: var(--header-ink); border: 1.5px solid var(--line); border-radius: 3px; }
+.icon-button:hover { border-color: var(--header-ink); }
+.icon-button svg { width: 18px; height: 18px; }
+.icon-button.flag svg { width: 22px; height: 15px; border-radius: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,.15); }
+.app-header .header-link { color: var(--header-ink); font-weight: 600; text-decoration: none; }
+.app-header .header-link:hover { text-decoration: underline; text-underline-offset: 4px; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; flex: 1; min-height: 0; }
 .map { height: 100%; }
 .panel { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
 
-h1, h2 { margin: 0; font-weight: 600; }
+h1, h2 { margin: 0; font-family: var(--display); font-weight: 700; }
 h1 { font-size: 1.3rem; }
-h2 { font-size: 1rem; }
+h2 { font-size: 1.25rem; }
 
 .panel-head { display: flex; flex-direction: column; gap: 4px; }
 .status { display: flex; align-items: center; gap: 6px; font: 12px var(--mono); color: var(--muted); }
@@ -63,6 +111,11 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
 .enemy-popup .quote { font-style: italic; color: #555; }
 .enemy-popup .kill { margin-top: 4px; background: #e5484d; color: #fff; border: 0; padding: 6px 10px; font-weight: 600; }
 .enemy-cluster { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #e5484d; color: #fff; border: 3px solid #fff; font: 700 13px var(--mono); box-shadow: 0 0 0 4px rgba(229, 72, 77, .35); }
+.heading-icon { pointer-events: none; }
+.heading { width: 56px; height: 56px; position: relative; transition: transform .4s ease; }
+.heading span { position: absolute; left: 50%; top: 0; transform: translateX(-50%); width: 0; height: 0;
+  border-left: 8px solid transparent; border-right: 8px solid transparent; border-bottom: 14px solid var(--unit-color, #fff);
+  filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff); }
 .squad-box { background: var(--panel); color: var(--ink); border: 1px solid var(--accent); border-radius: 6px; padding: 8px 10px; display: grid; gap: 6px; min-width: 180px; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
 .squad-title { font: 600 12px var(--mono); }
 .squad-members { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -82,6 +135,8 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
 .sim { background: transparent; color: var(--muted); border: 1px dashed var(--line); padding: 8px; font: 12px var(--mono); }
 .sim.on { color: #fff; background: #e5484d; border: 1px solid #e5484d; }
 .history-head { display: flex; justify-content: space-between; align-items: center; }
+.history-actions { display: flex; gap: 6px; }
+#clear-history { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 4px 8px; font-size: 12px; }
 #verify { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 4px 8px; font-size: 12px; }
 .msg { margin: 0; font: 12px var(--mono); color: var(--muted); min-height: 1em; }
 .msg.ok { color: var(--ok); }
@@ -101,6 +156,8 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
 .unit-label::before { display: none; }
 
 @media (max-width: 800px) {
+  body.app { display: block; }
+  .app-header .node { display: none; }
   .layout { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
   .map { height: 55vh; }
   .panel { border-left: 0; border-top: 1px solid var(--line); }

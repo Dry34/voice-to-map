@@ -102,6 +102,18 @@ async def locate_landmark(landmark: dict, ref: Point) -> tuple[Point, str, str |
     center = (settings.zone_lat, settings.zone_lon)
     hit = await osm.nominatim_named(name, center, NAMED_PLACE_RADIUS_M)
     if hit is None:
+        # Nominatim est strict sur les petits mots : « centre de santé de Yvonne Pouzin » ne donne rien,
+        # « centre de santé Yvonne Pouzin » oui.
+        short = " ".join(t for t in name.split() if t.lower() not in ("de", "du", "des", "d'", "la", "le", "les", "l'"))
+        if short and short != name:
+            hit = await osm.nominatim_named(short, center, NAMED_PLACE_RADIUS_M)
+    if hit is None:
+        # Photon (plus tolérant), avec la même vérification du nom.
+        for c in await osm.photon(name, center, NAMED_PLACE_RADIUS_M):
+            if osm.name_matches(name, c["name"]):
+                hit = c
+                break
+    if hit is None:
         hit = await osm.nominatim_named(name, center, REGION_RADIUS_M)
     if hit:
         return (hit["lat"], hit["lon"]), hit["name"], hit["osm_id"]
@@ -128,6 +140,8 @@ async def _resolve_around(intent: dict, ref: Point, last: Point | None) -> dict 
         if last is None or bearing is None:
             return None
         dist = intent.get("distance_m") or DEFAULT_ALONG_M
+        if intent.get("turn_label"):
+            return _place(destination(last, bearing, dist), relation, intent["turn_label"])
         where = f"à {intent['clock']}h" if intent.get("clock") else intent.get("direction") or ""
         label = (intent.get("landmark") or {}).get("name") or (f"{int(dist)} m {where}".strip() if relation == "offset" else None)
         return _place(destination(last, bearing, dist), relation, label)
