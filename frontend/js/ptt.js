@@ -3,7 +3,7 @@
 
 const MIN_MS = 400; // en dessous, on considère que c'est un clic accidentel
 
-export function setupPushToTalk({ button, getUnit, onStatus, onEvent }) {
+export function setupPushToTalk({ button, upload, onStatus, onEvent }) {
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
     button.disabled = true;
     onStatus("err", "Ce navigateur ne permet pas d'enregistrer le micro. Utilisez Chrome ou Safari.");
@@ -17,7 +17,7 @@ export function setupPushToTalk({ button, getUnit, onStatus, onEvent }) {
   let busy = false;
 
   async function start() {
-    if (recorder || busy) return;
+    if (recorder || busy || button.disabled || button.closest("[hidden]")) return;
     try {
       stream = stream || (await navigator.mediaDevices.getUserMedia({ audio: true }));
     } catch {
@@ -51,18 +51,12 @@ export function setupPushToTalk({ button, getUnit, onStatus, onEvent }) {
     }
     const type = chunks[0]?.type || "audio/webm";
     const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
-    const form = new FormData();
-    form.append("unit", getUnit());
-    form.append("audio", new Blob(chunks, { type }), `annonce.${ext}`);
 
     busy = true;
     button.disabled = true;
     onStatus("", "Transcription et analyse…");
     try {
-      const r = await fetch("/api/reports/audio", { method: "POST", body: form });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
-      onEvent(body);
+      onEvent(await upload(new Blob(chunks, { type }), `annonce.${ext}`));
     } catch (err) {
       onStatus("err", `Échec : ${err.message}`);
     } finally {

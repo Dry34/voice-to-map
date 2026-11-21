@@ -4,15 +4,18 @@ Le repère est toujours cherché autour de la dernière position connue de
 l'unité (ou du centre de la zone), et chaque point porte un rayon d'incertitude.
 """
 
+import re
+
 from ..config import settings
 from . import osm
 from .geometry import BEARINGS, DIRECTION_BEARINGS, Point, closest_pair, destination, nearest
 
 # Rayon d'incertitude par relation, en mètres (voir le tableau du plan).
 UNCERTAINTY_M = {"at": 30, "near": 150, "north_of": 80, "south_of": 80, "east_of": 80,
-                 "west_of": 80, "towards": 60, "along": 50, "intersection": 20}
+                 "west_of": 80, "towards": 60, "along": 50, "intersection": 20, "offset": 60}
 CARDINAL_OFFSET_M = 120
-NAMED_PLACE_RADIUS_M = 10_000
+NAMED_PLACE_RADIUS_M = 10_000   # Paris intra-muros et proche banlieue
+REGION_RADIUS_M = 60_000        # Île-de-France (Disneyland, Versailles…)
 DEFAULT_ALONG_M = 100
 
 
@@ -21,9 +24,31 @@ def _place(pt: Point, relation: str, label: str | None, osm_id: str | None = Non
             "label": label, "osm_id": osm_id}
 
 
+def _unit_position(name: str) -> tuple[Point, str] | None:
+    """« Bravo 2 », « beta2 » -> dernière position connue de cette unité, si elle est sur la carte."""
+    from ..intent.rules import normalize_callsign
+    from ..state import journal
+
+    raw = " ".join(name.upper().split())
+    candidates = {raw, normalize_callsign(name) or raw, re.sub(r"([A-Z])(\d)", r"\1 \2", raw)}
+    for unit in candidates:
+        pos = journal.last_position(unit)
+        if pos:
+            return pos, unit
+    return None
+
+
 async def locate_landmark(landmark: dict, ref: Point) -> tuple[Point, str, str | None] | None:
     name, kind = landmark["name"], landmark.get("kind", "named_place")
     radius = settings.zone_radius_m
+
+    # Une autre unité (« je vais vers Bravo 2 », « je suis avec Alpha 1 ») : sa dernière position.
+    if kind == "unit" or re.search(r"\d", name):
+        found = _unit_position(name)
+        if found:
+            return found[0], found[1], None
+        if kind == "unit":
+            return None
 
     if kind == "street":
         street = await osm.find_street(name, ref, radius)
@@ -31,20 +56,24 @@ async def locate_landmark(landmark: dict, ref: Point) -> tuple[Point, str, str |
             label, lines = street
             return nearest(ref, [p for line in lines for p in line]), label, None
 
-    generic = osm.generic_kind(kind) or osm.generic_kind(name)
+    # Repère générique seulement si le nom EST le mot générique (« the church », « l'église »).
+    # « bois de Boulogne » (kind park) est un nom propre : pas « le parc le plus proche ».
+    generic = osm.generic_kind(name)
     if generic:
         poi = await osm.find_poi(generic, ref, radius)
         if poi:
             return (poi["lat"], poi["lon"]), poi["name"], poi.get("osm_id")
 
     for p in osm.zone_cache()["pois"]:
-        if name.lower() in p["name"].lower():
+        if osm.name_matches(name, p["name"]):
             return (p["lat"], p["lon"]), p["name"], p.get("osm_id")
 
-    hit = await osm.nominatim(name, ref, radius)
+    # Nom propre : le lieu le plus connu qui porte ce nom dans la ville, puis dans la région.
+    # (Pas « le plus proche de l'unité » : ça donnait une petite église de Passy pour Notre-Dame.)
+    center = (settings.zone_lat, settings.zone_lon)
+    hit = await osm.nominatim_named(name, center, NAMED_PLACE_RADIUS_M)
     if hit is None:
-        # Un nom propre (« tour Eiffel ») peut être loin de l'unité : on élargit à toute la ville.
-        hit = await osm.nominatim(name, (settings.zone_lat, settings.zone_lon), NAMED_PLACE_RADIUS_M)
+        hit = await osm.nominatim_named(name, center, REGION_RADIUS_M)
     if hit:
         return (hit["lat"], hit["lon"]), hit["name"], hit["osm_id"]
     return None
@@ -62,12 +91,13 @@ async def resolve(intent: dict, ref: Point, last: Point | None) -> dict | None:
 async def _resolve_around(intent: dict, ref: Point, last: Point | None) -> dict | None:
     relation = intent.get("relation")
 
-    if relation == "along":
+    if relation in ("along", "offset"):
+        # along : « je remonte la rue vers le nord sur 200 m » ; offset : « ennemi à 300 m au nord-est de moi ».
         bearing = DIRECTION_BEARINGS.get(intent.get("direction") or "")
         if last is None or bearing is None:
             return None
         dist = intent.get("distance_m") or DEFAULT_ALONG_M
-        label = (intent.get("landmark") or {}).get("name")
+        label = (intent.get("landmark") or {}).get("name") or (f"{int(dist)} m {intent['direction']}" if relation == "offset" else None)
         return _place(destination(last, bearing, dist), relation, label)
 
     if relation == "intersection":
@@ -93,5 +123,5 @@ async def _resolve_around(intent: dict, ref: Point, last: Point | None) -> dict 
         return None
     pt, label, osm_id = found
     if relation in BEARINGS:
-        pt = destination(pt, BEARINGS[relation], CARDINAL_OFFSET_M)
+        pt = destination(pt, BEARINGS[relation], intent.get("distance_m") or CARDINAL_OFFSET_M)
     return _place(pt, relation or "at", label, osm_id)

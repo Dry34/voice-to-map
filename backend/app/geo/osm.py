@@ -7,10 +7,12 @@ Ordre de recherche, du plus rapide au plus lent :
 """
 
 import asyncio
+import difflib
 import json
 import logging
 import re
 import time
+import unicodedata
 
 import httpx
 
@@ -22,6 +24,7 @@ log = logging.getLogger(__name__)
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 PHOTON_URL = "https://photon.komoot.io/api/"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 HEADERS = {"User-Agent": "voice-to-map-hackathon/0.1"}
 OVERPASS_TIMEOUT_S = 3
 OVERPASS_PAUSE_S = 120
@@ -195,7 +198,86 @@ async def nominatim(query: str, ref: Point, radius_m: float) -> dict | None:
     return hit
 
 
+STOPWORDS = {"le", "la", "les", "l", "de", "du", "des", "d", "the", "of", "a", "au", "aux", "et", "en", "sur"}
+
+
+def _tokens(text: str) -> list[str]:
+    text = unicodedata.normalize("NFKD", text.lower())
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return [t for t in re.split(r"[^a-z0-9]+", text) if t and t not in STOPWORDS]
+
+
+def name_matches(query: str, candidate: str) -> bool:
+    """Chaque mot du nom demandé doit se retrouver (à une faute près) dans le résultat.
+
+    Évite qu'une recherche « bois de Boulogne » renvoie « Jardins du Trocadéro »
+    juste parce que c'est le seul résultat dans la zone.
+    """
+    wanted, have = _tokens(query), _tokens(candidate)
+    if not wanted:
+        return False
+    for w in wanted:
+        if not any(h == w or (len(w) >= 4 and (h.startswith(w) or difflib.SequenceMatcher(None, w, h).ratio() >= 0.8))
+                   for h in have):
+            return False
+    return True
+
+
+async def nominatim_named(query: str, center: Point, radius_m: float) -> dict | None:
+    """Nom propre dans une boîte, classé par notoriété (ordre de Nominatim), nom vérifié.
+
+    Contrairement à nominatim(), on ne prend pas « le plus proche » : pour « Notre-Dame »,
+    on veut la cathédrale, pas la petite église à côté de l'unité.
+    """
+    key = f"nominatim-named:{query}:{round(center[0], 3)}:{round(center[1], 3)}:{int(radius_m)}"
+    if key in _cache:
+        return _cache[key]
+    lon_min, lat_min, lon_max, lat_max = _box(center, radius_m)
+    results = await _nominatim_search({"q": query, "limit": 8, "bounded": 1,
+                                       "viewbox": f"{lon_min},{lat_max},{lon_max},{lat_min}"})
+    if results is None:
+        return None
+    hit = None
+    for res in results:
+        name = res.get("name") or res.get("display_name", "").split(",")[0]
+        if name_matches(query, name) or name_matches(query, ", ".join(res.get("display_name", "").split(",")[:2])):
+            hit = {"name": name or query, "lat": float(res["lat"]), "lon": float(res["lon"]),
+                   "osm_id": f"{res.get('osm_type')}/{res.get('osm_id')}"}
+            break
+    _cache[key] = hit
+    return hit
+
+
 Line = list[Point]
+
+
+async def nearest_street(pt: Point) -> tuple[str, Line] | None:
+    """Rue la plus proche d'un point (géocodage inverse Nominatim) : nom et tracé."""
+    key = f"reverse-street:{round(pt[0], 4)}:{round(pt[1], 4)}"
+    if key in _cache:
+        return _cache[key]
+    global _nominatim_last
+    async with _nominatim_lock:
+        wait = 1.0 - (time.monotonic() - _nominatim_last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        try:
+            async with httpx.AsyncClient(timeout=4, headers=HEADERS) as client:
+                r = await client.get(NOMINATIM_REVERSE_URL, params={
+                    "format": "json", "lat": pt[0], "lon": pt[1], "zoom": 17, "layer": "address", "polygon_geojson": 1})
+                r.raise_for_status()
+            res = r.json()
+        except Exception as exc:
+            log.warning("Nominatim reverse indisponible : %s", exc)
+            return None
+        finally:
+            _nominatim_last = time.monotonic()
+    geo = res.get("geojson") or {}
+    coords = geo.get("coordinates") or []
+    line = coords if geo.get("type") == "LineString" else coords[0] if geo.get("type") == "MultiLineString" and coords else []
+    found = (res.get("name") or "rue", [(c[1], c[0]) for c in line]) if len(line) >= 2 else None
+    _cache[key] = found
+    return found
 
 
 async def nominatim_street(name: str, ref: Point, radius_m: float) -> tuple[str, list[Line]] | None:

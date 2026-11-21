@@ -5,7 +5,7 @@ import math
 EARTH_RADIUS_M = 6_371_000
 
 BEARINGS = {"north_of": 0, "east_of": 90, "south_of": 180, "west_of": 270}
-DIRECTION_BEARINGS = {"N": 0, "E": 90, "S": 180, "W": 270}
+DIRECTION_BEARINGS = {"N": 0, "NE": 45, "E": 90, "SE": 135, "S": 180, "SW": 225, "W": 270, "NW": 315}
 
 Point = tuple[float, float]
 
@@ -73,3 +73,20 @@ def closest_pair(a: list[Line], b: list[Line]) -> tuple[Point, float] | None:
             if best is None or d < best[1]:
                 best = (((p[0] + q[0]) / 2, (p[1] + q[1]) / 2), d)
     return best
+
+
+def project_on_line(p: Point, line: list[Point]) -> tuple[Point, float]:
+    """Point de la polyligne le plus proche de p (projection sur les segments) et cap du segment (degrés)."""
+    k = math.cos(math.radians(p[0]))  # repère local plat : x = lon * cos(lat), y = lat
+    best, best_d, best_bearing = line[0], float("inf"), 0.0
+    for a, b in zip(line, line[1:]):
+        ax, ay, bx, by = a[1] * k, a[0], b[1] * k, b[0]
+        px, py = p[1] * k, p[0]
+        dx, dy = bx - ax, by - ay
+        t = 0.0 if dx == dy == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+        q = (ay + t * dy, (ax + t * dx) / k)
+        d = haversine(p, q)
+        if d < best_d:
+            best, best_d = q, d
+            best_bearing = (math.degrees(math.atan2(dx, dy)) + 360) % 360
+    return best, best_bearing
