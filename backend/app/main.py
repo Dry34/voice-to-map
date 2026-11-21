@@ -10,6 +10,18 @@ from .config import ROOT
 
 logging.basicConfig(level=logging.INFO)
 
+
+
+class FrontendFiles(StaticFiles):
+    """Le front change souvent pendant le hackathon : le navigateur revérifie chaque fichier
+    à chaque chargement (sinon il garde d'anciens modules JS et la page casse)."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 app = FastAPI(title="Voice-to-Map")
 app.include_router(router)
-app.mount("/", StaticFiles(directory=ROOT / "frontend", html=True), name="frontend")
+app.mount("/", FrontendFiles(directory=ROOT / "frontend", html=True), name="frontend")

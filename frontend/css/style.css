@@ -43,6 +43,30 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
 .ptt:disabled { opacity: .6; cursor: wait; }
 .hint { margin: 0 0 6px; font: 11px var(--mono); color: var(--muted); text-align: center; }
 
+.identity { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 4px; padding: 12px; }
+.identity .row { display: flex; gap: 6px; }
+.identity .row input { flex: 1; min-width: 0; text-transform: uppercase; }
+#claim { background: var(--accent); color: #fff; border: 0; padding: 8px 14px; font-weight: 600; }
+.identity.me { grid-template-columns: 1fr auto; align-items: center; border-color: var(--accent); }
+.identity.me.pc { border-color: var(--line); }
+.me-unit { display: block; font: 600 1.2rem var(--mono); }
+.link { background: transparent; border: 0; color: var(--muted); padding: 2px 4px; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.link:hover { color: var(--ink); }
+.hint.left { text-align: left; margin: 0; }
+[hidden] { display: none !important; }
+.unit-label.enemy { background: #e5484d; color: #fff; font-weight: 600; }
+.enemy-icon span { display: block; width: 14px; height: 14px; margin: 2px; background: #e5484d; border: 2px solid #fff; transform: rotate(45deg); box-shadow: 0 0 0 2px rgba(229, 72, 77, .35); }
+.badge.left { color: var(--muted); border: 1px solid var(--line); }
+.enemy-icon.down span { background: #6b7680; box-shadow: none; }
+.unit-label.enemy.down { background: #6b7680; text-decoration: line-through; }
+.enemy-popup { display: grid; gap: 4px; font: 12px var(--font); }
+.enemy-popup .quote { font-style: italic; color: #555; }
+.enemy-popup .kill { margin-top: 4px; background: #e5484d; color: #fff; border: 0; padding: 6px 10px; font-weight: 600; }
+.enemy-cluster { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #e5484d; color: #fff; border: 3px solid #fff; font: 700 13px var(--mono); box-shadow: 0 0 0 4px rgba(229, 72, 77, .35); }
+.badge.down { color: #fff; background: #6b7680; border: 1px solid #6b7680; }
+.badge.enemy { color: #fff; background: #e5484d; border: 1px solid #e5484d; }
+.unit-label.own { background: var(--accent); color: #fff; font-weight: 600; }
+
 .samples { display: flex; flex-wrap: wrap; gap: 6px; }
 .samples .label { width: 100%; }
 .sample { background: transparent; color: var(--ink); border: 1px solid var(--line); padding: 4px 8px; font-size: 12px; font-style: italic; }

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Voice-to-Map</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -22,9 +23,29 @@
         </div>
       </header>
 
-      <form id="report-form" class="report">
-        <label for="unit">Unité</label>
-        <input id="unit" name="unit" value="ALPHA 2" autocomplete="off">
+      <section id="claim-view" class="identity" hidden>
+        <label for="unit" class="label">Quelle unité ce terminal gère-t-il ?</label>
+        <div class="row">
+          <input id="unit" name="unit" placeholder="ALPHA 1" autocomplete="off">
+          <button type="button" id="claim">Prendre</button>
+        </div>
+        <p id="claim-msg" class="msg" role="status"></p>
+        <p id="taken" class="hint left"></p>
+        <button type="button" id="pc-mode" class="link">Poste de commandement : voir sans unité</button>
+      </section>
+
+      <section id="me-view" class="identity me" hidden>
+        <div>
+          <span class="label" id="me-label">Ce terminal gère</span>
+          <strong id="me" class="me-unit"></strong>
+        </div>
+        <div class="row">
+          <button type="button" id="leave" class="link">Prendre une unité</button>
+          <button type="button" id="release" class="link">Quitter l'unité</button>
+        </div>
+      </section>
+
+      <form id="report-form" class="report" hidden>
         <button type="button" id="ptt" class="ptt">Maintenir pour parler</button>
         <p class="hint">ou maintenir la barre espace, hors des champs de saisie</p>
         <label for="text">Annonce écrite</label>
@@ -33,12 +54,17 @@
         <p id="form-msg" class="msg" role="status"></p>
       </form>
 
-      <div class="samples">
+      <div class="samples" id="samples" hidden>
         <span class="label">Exemples</span>
         <button type="button" class="sample">I am at Notre-Dame.</button>
         <button type="button" class="sample">I am south of the church.</button>
         <button type="button" class="sample">I moved towards rue de Rivoli.</button>
         <button type="button" class="sample">Moving north along rue Saint-Denis, about 200 meters.</button>
+        <button type="button" class="sample">Contact, trois ennemis au nord de l'église.</button>
+        <button type="button" class="sample">Ennemi à 200 mètres au nord-est.</button>
+        <button type="button" class="sample">Je veux aller vers Bravo 2.</button>
+        <button type="button" class="sample">E1 au sud du pont.</button>
+        <button type="button" class="sample">E1 neutralisé.</button>
       </div>
 
       <div class="history-head">
@@ -51,6 +77,7 @@
   </main>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
