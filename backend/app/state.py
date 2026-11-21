@@ -1,9 +1,10 @@
-"""Objets partagés par toute l'application : le journal et le hub WebSocket."""
+"""Objets partagés par toute l'application : le journal, le registre des unités et le hub WebSocket."""
 
 from fastapi import WebSocket
 
 from .config import settings
 from .store.journal import Journal
+from .store.units import UnitRegistry
 
 
 class Hub:
@@ -28,4 +29,5 @@ class Hub:
 
 
 journal = Journal(settings.db_path)
+units = UnitRegistry(settings.db_path)
 hub = Hub()

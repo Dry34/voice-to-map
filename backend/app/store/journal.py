@@ -2,6 +2,9 @@
 
 Chaque événement contient le hash du précédent. Toute modification ou
 suppression dans l'historique casse la chaîne, et verify() la détecte.
+
+Une annonce venant d'un terminal garde aussi le message signé par ce terminal,
+sa signature Ed25519 et sa clé publique : verify() revérifie chaque signature.
 Responsable : B.
 """
 
@@ -20,6 +23,8 @@ HASHED = [
     "id", "unit", "ts", "transcript", "intent_json", "lat", "lon",
     "uncertainty_m", "resolved_landmark", "status", "origin_node",
 ]
+# Ajoutés au hash seulement pour les événements signés (les anciens restent valides).
+SIGNED = ["signed_message", "signature", "public_key"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -36,7 +41,10 @@ CREATE TABLE IF NOT EXISTS events (
     status            TEXT NOT NULL,
     origin_node       TEXT NOT NULL,
     prev_hash         TEXT NOT NULL,
-    hash              TEXT NOT NULL
+    hash              TEXT NOT NULL,
+    signed_message    TEXT,
+    signature         TEXT,
+    public_key        TEXT
 );
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'journal en ajout seul'); END;
@@ -46,7 +54,8 @@ BEGIN SELECT RAISE(ABORT, 'journal en ajout seul'); END;
 
 
 def compute_hash(row: dict, prev_hash: str) -> str:
-    payload = json.dumps({k: row[k] for k in HASHED}, sort_keys=True, ensure_ascii=False)
+    fields = HASHED + (SIGNED if row.get("signature") else [])
+    payload = json.dumps({k: row[k] for k in fields}, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256((payload + prev_hash).encode("utf-8")).hexdigest()
 
 
@@ -63,6 +72,11 @@ class Journal:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
+        # Base créée avant les signatures : on ajoute les colonnes manquantes.
+        existing = {r["name"] for r in self._conn.execute("PRAGMA table_info(events)")}
+        for col in SIGNED:
+            if col not in existing:
+                self._conn.execute(f"ALTER TABLE events ADD COLUMN {col} TEXT")
         self._lock = threading.Lock()
 
     def _last_hash(self) -> str:
@@ -82,6 +96,7 @@ class Journal:
         status: str,
         origin_node: str,
         ts: str | None = None,
+        signed: dict | None = None,
     ) -> dict:
         row = {
             "id": str(uuid.uuid4()),
@@ -97,6 +112,8 @@ class Journal:
             "status": status,
             "origin_node": origin_node,
         }
+        if signed:
+            row.update({k: signed[k] for k in SIGNED})
         with self._lock:
             prev = self._last_hash()
             row["prev_hash"] = prev
@@ -116,21 +133,63 @@ class Journal:
         return [_to_event(r) for r in rows]
 
     def last_position(self, unit: str) -> tuple[float, float] | None:
-        row = self._conn.execute(
-            "SELECT lat, lon FROM events WHERE unit = ? AND lat IS NOT NULL "
-            "AND status = 'confirmed' ORDER BY seq DESC LIMIT 1",
+        """Dernière position confirmée, en ignorant tout ce qui précède un départ (status 'left')."""
+        left = self._conn.execute(
+            "SELECT coalesce(max(seq), 0) AS s FROM events WHERE (unit = ? AND status = 'left') OR status = 'cleared'",
             (unit,),
+        ).fetchone()["s"]
+        row = self._conn.execute(
+            "SELECT lat, lon FROM events WHERE unit = ? AND seq > ? AND lat IS NOT NULL "
+            "AND status = 'confirmed' "
+            "AND coalesce(json_extract(intent_json, '$.subject'), 'self') != 'enemy' "  # ennemi vu ≠ position de l'unité
+            "ORDER BY seq DESC LIMIT 1",
+            (unit, left),
         ).fetchone()
         return (row["lat"], row["lon"]) if row else None
 
+    def enemies(self) -> dict[str, dict]:
+        """État de chaque ennemi : {"E3": {"alive": bool, "lat", "lon"}}, rejoué depuis le journal."""
+        state: dict[str, dict] = {}
+        rows = self._conn.execute(
+            "SELECT status, lat, lon, json_extract(intent_json, '$.enemy_id') AS eid FROM events "
+            "WHERE json_extract(intent_json, '$.subject') = 'enemy' AND eid IS NOT NULL "
+            "AND seq > ? ORDER BY seq",
+            (self.last_clear(),),
+        )
+        for r in rows:
+            e = state.setdefault(r["eid"], {"alive": True, "lat": None, "lon": None})
+            if r["status"] == "enemy_down":
+                e["alive"] = False
+            elif r["status"] == "confirmed" and r["lat"] is not None:
+                e.update(lat=r["lat"], lon=r["lon"])
+        return state
+
+    def last_clear(self) -> int:
+        """seq de la dernière remise à zéro de la carte (0 si jamais)."""
+        return self._conn.execute(
+            "SELECT coalesce(max(seq), 0) AS s FROM events WHERE status = 'cleared'"
+        ).fetchone()["s"]
+
+    def next_enemy_id(self) -> str:
+        nums = [int(k[1:]) for k in self.enemies() if k[1:].isdigit()]
+        return f"E{max(nums, default=0) + 1}"
+
     def verify(self) -> dict:
-        """Rejoue la chaîne et renvoie le premier événement qui ne correspond pas."""
+        """Rejoue la chaîne et les signatures, renvoie le premier événement qui ne correspond pas."""
+        from ..security.signing import verify_signature
+
         prev = GENESIS
-        count = 0
+        count = signed = 0
         for row in self._conn.execute("SELECT * FROM events ORDER BY seq"):
             r = dict(row)
             if r["prev_hash"] != prev or compute_hash(r, prev) != r["hash"]:
-                return {"ok": False, "count": count, "broken_at": r["seq"]}
+                return {"ok": False, "count": count, "signed": signed, "broken_at": r["seq"], "reason": "hash"}
+            if r["signature"]:
+                parts = (r["signed_message"] or "").split("|")
+                if (len(parts) != 7 or parts[3] != r["unit"]
+                        or not verify_signature(r["public_key"], r["signature"], r["signed_message"])):
+                    return {"ok": False, "count": count, "signed": signed, "broken_at": r["seq"], "reason": "signature"}
+                signed += 1
             prev = r["hash"]
             count += 1
-        return {"ok": True, "count": count, "broken_at": None}
+        return {"ok": True, "count": count, "signed": signed, "broken_at": None, "reason": None}

@@ -13,7 +13,7 @@ def test_chain_is_valid(tmp_path):
     first = _append(j, "one")
     second = _append(j, "two")
     assert second["prev_hash"] == first["hash"]
-    assert j.verify() == {"ok": True, "count": 2, "broken_at": None}
+    assert j.verify() == {"ok": True, "count": 2, "signed": 0, "broken_at": None, "reason": None}
 
 
 def test_update_and_delete_are_refused(tmp_path):
@@ -36,7 +36,7 @@ def test_tampering_is_detected(tmp_path):
     conn.execute("DROP TRIGGER events_no_update")
     conn.execute("UPDATE events SET lat = 0 WHERE seq = 2")
     conn.commit()
-    assert j.verify() == {"ok": False, "count": 1, "broken_at": 2}
+    assert j.verify() == {"ok": False, "count": 1, "signed": 0, "broken_at": 2, "reason": "hash"}
 
 
 def test_last_position(tmp_path):
