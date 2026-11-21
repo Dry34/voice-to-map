@@ -86,9 +86,16 @@ def _landmark(raw: str) -> dict:
     return {"name": name, "kind": kind_of(name)}
 
 
+CONFIRM = re.compile(r"^\W*(?:je\s+)?(confirm[ée]?s?|confirme|affirmatif|c'est bon|valid[ée]|confirmed|affirmative|roger)\W*$", re.I)
+
+
 def parse(text: str) -> dict:
     out = _parse(text)
     low = text.lower()
+    if CONFIRM.match(split_callsign(text.strip())[1]):
+        out.update(subject="self", type="confirm", relation="unknown", landmark=None, confidence=0.9,
+                   count=None, description=None, enemy_id=None, enemy_ids=[], scope=None, clock=None)
+        return out
     m = CLOCK.search(low)
     out["clock"] = None
     facing = re.search(r"\b(je regarde|on regarde|je me tourne|on se tourne|face (?:au|à l')|i(?:'m| am) facing|facing)\b", low)

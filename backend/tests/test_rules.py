@@ -198,3 +198,33 @@ def test_direction_in_needs_preposition():
     assert direction_in("Je continue 40 m vers le sud") == "S"
     assert direction_in("On part au nord-est") == "NE"
     assert direction_in("Alpha 1 est aux Invalides") is None
+
+
+def test_missing_confidence_defaults():
+    from app.intent.extractor import _normalize
+    assert _normalize({"relation": "at", "landmark": {"name": "Louvre", "kind": "named_place"}})["confidence"] == 0.8
+    assert _normalize({"relation": "unknown"})["confidence"] == 0.3
+    assert _normalize({"relation": "at", "confidence": 0.95})["confidence"] == 0.95
+
+
+def test_confirm_phrases():
+    for t in ["Confirmé.", "Je confirme", "Affirmatif !", "Alpha 1, confirmé."]:
+        assert parse(t)["type"] == "confirm", t
+    assert parse("Je suis au Louvre.")["type"] != "confirm"
+
+
+def test_confirmable(tmp_path):
+    from app.store.journal import Journal
+    j = Journal(tmp_path / "e.db")
+    c = dict(transcript="x", uncertainty_m=30, resolved_landmark="x", origin_node="central")
+    p = j.append(unit="A 1", intent={"subject": "self"}, lat=1.0, lon=2.0, status="pending_review", **c)
+    j.append(unit="A 1", intent={"subject": "self"}, lat=None, lon=None, status="pending_review", **c)  # lieu introuvable
+    assert [e["seq"] for e in j.confirmable("A 1")] == [p["seq"]]
+    j.append(unit="A 1", intent={"subject": "self", "confirmed_from": p["seq"]}, lat=1.0, lon=2.0, status="confirmed", **c)
+    assert j.confirmable("A 1") == []
+
+
+def test_street_name_must_match():
+    from app.geo.osm import name_matches
+    assert name_matches("rue faubourg saint-antoine", "Rue du Faubourg Saint-Antoine")
+    assert not name_matches("rue faubourg saint-antoine", "Rue du Grand Prieuré")

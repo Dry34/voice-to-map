@@ -21,19 +21,17 @@ async def process_report(unit: str, text: str, *, signed: dict | None = None) ->
     (tests, outils), l'indicatif prononcé l'emporte comme avant.
     """
     intents = await extract_intents(text, unit=unit, last_position=journal.last_position(unit))
-    # Ordre : neutralisations (là où l'unité est encore), puis sa propre position, puis les
-    # ennemis vus (« ennemi à 200 m au nord » se calcule depuis la nouvelle position).
-    def order(i: dict) -> int:
-        if i.get("subject") == "enemy" and i.get("type") == "kill":
-            return 0
-        if i.get("type") in ("group_join", "group_leave", "facing"):  # se regrouper / se tourner avant le reste
-            return 1
-        return 2 if i.get("subject") != "enemy" else 3
-
-    intents.sort(key=order)
+    # Les faits sont traités dans l'ordre où ils sont dits : « trois ennemis devant moi, du coup
+    # je recule » place les ennemis là où l'unité était quand elle les a vus, puis la fait reculer.
     events: list[dict] = []
     error: Exception | None = None
     killed_at: list[tuple[float, float]] = []  # positions des ennemis neutralisés dans cette annonce
+    # « Je remonte 300 m et je vois une squad ennemie » : l'analyse recopie parfois les 300 m sur
+    # l'ennemi. Une distance d'ennemi identique à celle d'un déplacement de l'unité est ignorée.
+    own = {i.get("distance_m") for i in intents if i.get("subject") != "enemy" and i.get("distance_m")}
+    for i in intents:
+        if i.get("subject") == "enemy" and i.get("distance_m") in own:
+            i["distance_m"] = None
     for intent in intents:
         try:
             if intent.get("subject") == "enemy" and intent.get("on_route"):
@@ -65,6 +63,8 @@ async def _process_fact(unit: str, text: str, intent: dict, signed: dict | None,
         return await leave_group(unit, text, signed=signed)
     if intent.get("type") == "facing":
         return await set_facing(unit, intent, text, signed=signed)
+    if intent.get("type") == "confirm":
+        return await confirm_pending(unit, None, text, signed=signed)
     spoken = intent.get("callsign")
     if spoken and spoken != unit:
         if signed:
@@ -112,6 +112,9 @@ async def _process_fact(unit: str, text: str, intent: dict, signed: dict | None,
     # droite » : d'abord jusqu'à la rue, dans le sens de la rue le plus proche de sa direction.
     if intent.get("relation") == "turn" and intent.get("subject") == "enemy":
         intent["relation"] = "unknown"  # où vont les ennemis ensuite, on ne le sait pas
+    if intent.get("relation") == "turn" and not intent.get("turn"):
+        # Pas de « droite / gauche / tout droit / demi-tour » dit : « prendre la rue X » = passer par la rue X.
+        intent["relation"] = "at" if (intent.get("landmark") or {}).get("name") else "unknown"
     if intent.get("relation") == "turn" and last:
         heading = journal.last_heading(unit) or 0.0
         start = last
@@ -138,13 +141,21 @@ async def _process_fact(unit: str, text: str, intent: dict, signed: dict | None,
         words = {"right": "à droite", "left": "à gauche", "straight": "tout droit", "back": "demi-tour"}
         intent.update(relation="offset", bearing_deg=round(bearing_between(last, end), 1),
                       distance_m=round(haversine(last, end)), confidence=max(intent.get("confidence") or 0, 0.8),
-                      turn_label=f"{words.get(intent.get('turn'), 'tout droit')} après {intent.get('blocks') or 1} bloc")
+                      turn_label="demi-tour" if intent.get("turn") == "back"
+                      else f"{words.get(intent.get('turn'), 'tout droit')} après {intent.get('blocks') or 1} bloc")
         intent["heading_after"] = round((heading + turn) % 360, 1)
 
     # « Je marche 60 m vers le sud » : une direction sans lieu = déplacement depuis sa position.
     if not intent.get("landmark") and intent.get("relation") in ("towards", "along", "at", "near", "unknown") \
             and (intent.get("direction") or intent.get("clock")):
         intent["relation"] = "offset"
+    # « Je monte de 200 m », « j'avance de 50 m » : une distance sans direction = droit devant.
+    if intent.get("subject") != "enemy" and intent.get("relation") == "offset" and intent.get("distance_m") \
+            and not intent.get("direction") and not intent.get("clock") and intent.get("bearing_deg") is None:
+        intent["clock"] = 12
+    # Ennemi vu sans distance : en ville, on ne voit pas à travers les immeubles -> 50 m devant.
+    if intent.get("subject") == "enemy" and intent.get("relation") == "offset" and not intent.get("distance_m"):
+        intent["distance_m"] = ENEMY_SIGHT_M
     # Horaire militaire : 12h = droit devant (sens de marche de l'unité, nord si inconnu), 6h = derrière.
     if intent.get("clock"):
         heading = journal.last_heading(unit) or 0.0
@@ -169,21 +180,32 @@ async def _process_fact(unit: str, text: str, intent: dict, signed: dict | None,
     confirmed = place is not None and intent.get("confidence", 0) >= MIN_CONFIDENCE
     if intent.get("subject") != "enemy":
         previous = last
-        if confirmed:  # pas pile sur une autre unité : quelques mètres d'écart
-            lat, lon = spread((place["lat"], place["lon"]), unit)
-            place = {**place, "lat": lat, "lon": lon}
+        if confirmed:
+            # L'unité marche par les rues et s'arrête SUR la rue (jamais dans un bâtiment),
+            # à quelques mètres des autres unités si elles sont au même endroit.
+            route, end = await walk_to(unit, last, (place["lat"], place["lon"]))
+            if route:
+                intent["route"] = [list(p) for p in route]
+            place = {**place, "lat": end[0], "lon": end[1]}
             # Où regarde l'unité : son sens de marche (sinon elle garde sa direction d'avant).
             if intent.get("heading_after") is not None:  # après un virage : la nouvelle direction de la rue
                 intent["heading_deg"] = intent["heading_after"]
-            elif last and haversine(last, (lat, lon)) > 5:
-                intent["heading_deg"] = round(bearing_between(last, (lat, lon)), 1)
+            elif last and haversine(last, end) > 5:
+                intent["heading_deg"] = round(bearing_between(last, end), 1)
             elif journal.last_heading(unit) is not None:
                 intent["heading_deg"] = journal.last_heading(unit)
-    if confirmed and previous:
-        # Trajet à pied par les rues entre l'ancienne et la nouvelle position (sinon trait droit).
+    elif confirmed and previous:
+        # Ennemi déplacé par une annonce : trajet observé, par les rues.
         route = await foot_route(previous, (place["lat"], place["lon"]))
         if route:
             intent["route"] = [list(p) for p in route]
+    if group == 1 and confirmed and intent.get("subject") == "enemy" and intent.get("relation") == "offset":
+        # Un ennemi vu est dans la rue, pas au milieu d'un pâté de maisons.
+        street = await osm.nearest_street((place["lat"], place["lon"]))
+        if street:
+            snapped, _ = project_on_line((place["lat"], place["lon"]), street[1])
+            if haversine((place["lat"], place["lon"]), snapped) <= 40:
+                place = {**place, "lat": snapped[0], "lon": snapped[1], "label": f"{place['label']} · {street[0]}"}
     if group > 1 and confirmed:
         return await _enemy_group(unit, text, intent, place, group, signed)
     event = journal.append(
@@ -262,10 +284,48 @@ def direction_in(text: str) -> str | None:
     return WORD_DIRECTIONS[m.group(1)] if m else None
 
 
+ENEMY_SIGHT_M = 50  # portée de vue dans une rue, pour un ennemi vu sans distance
 BLOCK_M = 100       # un pâté de maisons à Paris
 AFTER_TURN_M = 50   # distance parcourue après le virage
 SPREAD_M = 6        # écart entre deux unités au même endroit (max 10 m)
 MIN_GAP_M = 4       # en dessous, on considère qu'elles sont l'une sur l'autre
+
+
+MAX_SNAP_M = 150  # au-delà, l'arrivée sur la rue est trop loin du lieu annoncé : on garde le lieu
+
+
+async def walk_to(unit: str, start: tuple[float, float] | None, target: tuple[float, float],
+                  taken: list[tuple[float, float]] | None = None) -> tuple[list | None, tuple[float, float]]:
+    """Itinéraire à pied jusqu'à target, arrivée sur la rue, écartée des autres unités.
+
+    Renvoie (itinéraire ou None, point d'arrivée).
+    """
+    from .geo.routing import route_length
+
+    if not start:
+        return None, spread(target, unit, taken)
+    route = await foot_route(start, target, snap_end=True)
+    if not route:
+        return None, spread(target, unit, taken)
+    if haversine(route[-1], target) > MAX_SNAP_M:  # lieu loin de toute rue praticable (grand parc…)
+        full = await foot_route(start, target)
+        return (full, target) if full else (None, spread(target, unit, taken))
+    # Unité déjà à l'arrivée : on s'arrête quelques mètres avant, le long de la rue.
+    others = [p for p in (journal.last_position(u) for u in journal.units_on_map() if u != unit) if p] + (taken or [])
+    pts = [tuple(p) for p in route]
+    for _ in range(4):
+        end = pts[-1]
+        if all(haversine(end, o) >= MIN_GAP_M for o in others) or route_length(pts) <= SPREAD_M:
+            break
+        left = SPREAD_M
+        while len(pts) > 2 and haversine(pts[-2], pts[-1]) <= left:
+            left -= haversine(pts[-2], pts[-1])
+            pts.pop()
+        a, b = pts[-2], pts[-1]
+        seg = haversine(a, b)
+        t = 1 - left / seg if seg else 1
+        pts[-1] = (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+    return pts, pts[-1]
 
 
 def spread(pt: tuple[float, float], unit: str, taken: list[tuple[float, float]] | None = None) -> tuple[float, float]:
@@ -299,14 +359,12 @@ async def _move_companions(unit: str, text: str, intent: dict, place: dict, name
     taken = [(place["lat"], place["lon"])]
     events = []
     for comp in dict.fromkeys(names):
-        pt = spread((place["lat"], place["lon"]), comp, taken)
-        taken.append(pt)
         comp_intent = {**intent, "with_units": None, "moved_by": unit, "route": None}
         prev = journal.last_position(comp)
-        if prev:
-            route = await foot_route(prev, pt)
-            if route:
-                comp_intent["route"] = [list(p) for p in route]
+        route, pt = await walk_to(comp, prev, (place["lat"], place["lon"]), taken)
+        taken.append(pt)
+        if route:
+            comp_intent["route"] = [list(p) for p in route]
         ev = journal.append(
             unit=comp, transcript=text, intent=comp_intent, lat=pt[0], lon=pt[1],
             uncertainty_m=place["uncertainty_m"], resolved_landmark=place["label"],
@@ -387,6 +445,35 @@ async def _enemies_on_route(unit: str, text: str, intent: dict, route: list, sig
         events.append(ev)
         await hub.broadcast({"type": "event", "event": ev})
     return events[0]
+
+
+async def confirm_pending(unit: str, seq: int | None, text: str, *, signed: dict | None = None) -> dict:
+    """Valide une annonce « à confirmer » (bouton, ou « confirmé » à la voix : la plus récente).
+
+    Le journal ne se modifie pas : on ajoute un événement confirmé qui reprend le lieu trouvé
+    (confirmed_from = numéro de l'annonce d'origine), avec le trajet depuis la position actuelle.
+    """
+    candidates = journal.confirmable(unit)
+    target = next((e for e in candidates if e["seq"] == seq), None) if seq is not None else (candidates[0] if candidates else None)
+    if target is None:
+        raise UnknownEnemy("Aucune annonce à confirmer pour cette unité (ou lieu introuvable : il faut la redire).")
+    pt = (target["lat"], target["lon"])
+    intent = {**(target["intent"] or {}), "confirmed_from": target["seq"], "confidence": 1.0,
+              "confirm_text": text, "route": None}
+    if (target["intent"] or {}).get("subject") != "enemy":
+        last = journal.last_position(unit)
+        route, pt = await walk_to(unit, last, pt)
+        if route:
+            intent["route"] = [list(p) for p in route]
+        if last and haversine(last, pt) > 5:
+            intent["heading_deg"] = round(bearing_between(last, pt), 1)
+    event = journal.append(
+        unit=unit, transcript=target["transcript"], intent=intent, lat=pt[0], lon=pt[1],
+        uncertainty_m=target["uncertainty_m"], resolved_landmark=target["resolved_landmark"],
+        status="confirmed", origin_node=settings.node_mode, signed=signed,
+    )
+    await hub.broadcast({"type": "event", "event": event})
+    return event
 
 
 async def set_facing(unit: str, intent: dict, text: str, *, signed: dict | None = None) -> dict:

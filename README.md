@@ -98,6 +98,7 @@ voice-to-map/
 - Flèche de direction par unité (sens de marche, « je regarde à 3h »). Navigation relative : « je suis la route et tourne à droite au prochain bloc ». Ennemis « sur le chemin » répartis le long du trajet.
 - Page d'accueil, interface en français et en anglais (drapeau), mode clair et sombre (soleil / lune). Liens directs : `?lang=en`, `?theme=dark`.
 - La remise à zéro vide aussi l'historique affiché ; « Effacer (local) » ne vide que son propre écran.
+- Annonce « à confirmer » avec un lieu trouvé : bouton « Confirmer », ou « confirmé » à la voix. Les unités s'arrêtent toujours sur la rue (jamais dans un bâtiment). Ennemi vu sans distance : 50 m devant, dans la rue.
 - Remise à zéro de la carte (unités et ennemis, l'historique reste) : `backend/.venv/bin/python scripts/clear_map.py`.
 
 - Push-to-talk : maintenir le bouton (ou la barre espace), parler, relâcher. L'audio part à Voxtral (`STT_MODEL`, `STT_LANGUAGE=fr`, qui comprend aussi l'anglais), puis suit le même chemin qu'une annonce tapée.

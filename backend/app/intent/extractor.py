@@ -35,7 +35,7 @@ where each FACT is:
   "count": integer | null,            // only for enemy: how many ("trois ennemis" -> 3)
   "description": string | null,       // only for enemy: short French description ("2 hommes armés", "véhicule blindé")
   "on_route": boolean,                // only for enemy: seen ON THE WAY of the unit's move ("sur le chemin", "en route")
-  "type": "position" | "movement" | "kill" | "group_join" | "group_leave" | "facing",   // "kill" only for enemy
+  "type": "position" | "movement" | "kill" | "group_join" | "group_leave" | "facing" | "confirm",   // "kill" only for enemy
   "relation": "at" | "near" | "north_of" | "south_of" | "east_of" | "west_of" | "towards" | "along" | "intersection" | "offset" | "turn" | "unknown",
   "landmark": {"name": string, "kind": string} | null,
   "landmarks": [string, string],      // only for "intersection": the two street names
@@ -47,6 +47,7 @@ where each FACT is:
   "confidence": number between 0 and 1
 }
 Rules:
+- Every FACT must include "confidence" (0.9 when the place is clearly named).
 - subject "enemy" when the report is about hostiles the unit sees: "contact", "ennemi(s)", "hostile(s)", "enemy spotted",
   "je vois deux types armés", "tango". Then relation/landmark describe WHERE THE ENEMY IS, not where the unit is.
   "Contact, trois ennemis au nord de l'église" -> subject enemy, count 3, relation north_of, landmark church.
@@ -88,10 +89,22 @@ Rules:
   words in "direction", never in landmark), distance_m 40 if said.
 - "Je prends la rue de Rivoli et tourne à droite au prochain bloc" -> self, relation "turn", turn "right", blocks 1,
   landmark {"name": "rue de Rivoli", "kind": "street"}.
+- Use relation "turn" ONLY when a turn is actually said (droite, gauche, tout droit, demi-tour, right, left, back).
+  "Je prends la rue Chapon pour aller dans la rue du Temple" -> TWO facts: self relation "at" rue Chapon, then self
+  relation "at" rue du Temple (kind "street" both). No turn.
+- "Je vais aller en arrière", "je recule", "je fais demi-tour", "on se replie" -> self, relation "turn", turn "back".
+- Positions relative to the speaker: "devant moi" = clock 12, "derrière moi" = clock 6, "à ma droite" = clock 3,
+  "à ma gauche" = clock 9 ("trois ennemis devant moi" -> enemy, count 3, relation "offset", clock 12).
+- Keep the facts in the order they are spoken: each one happens after the previous one.
+- distance_m belongs to ONE fact: "je remonte à 12h pendant 300 m et je vois une squad ennemie" -> the 300 m is the
+  unit's move; the enemy fact has distance_m null (seen ahead, clock 12). Never copy a distance to another fact.
+- "une squad / une équipe / un groupe ennemi" without a number -> count 4.
 - Street navigation relative to where the unit is heading: "je suis la route et tourne à droite au prochain bloc",
   "je prends la deuxième à gauche", "je continue tout droit sur 200 m", "demi-tour" -> subject self, type movement,
   relation "turn", turn right / left / straight / back, blocks 1 / 2 / null, distance_m if said, landmark null.
   ("je suis la route" = I follow the road, NOT "I am".)
+- Confirming a previous report: "confirmé", "je confirme", "affirmatif", "c'est bon", "validé", "confirmed"
+  -> subject self, type "confirm", relation "unknown", landmark null.
 - Facing: "je regarde à 3h", "on se tourne vers 9 heures", "face au nord", "je regarde vers l'est"
   -> subject self, type "facing", clock (relative, 1-12) or direction (absolute N/E/S/W…), landmark null.
 - Kill with a clock position: "ennemi éliminé à 4h", "j'ai abattu le tango à midi" -> kill, clock 4 / 12,
@@ -116,6 +129,15 @@ def _enemy_id(value) -> str | None:
     return f"E{int(m.group(1))}" if m else None
 
 
+def _confidence(raw: dict) -> float:
+    """Confiance donnée par l'analyse ; si elle l'a oubliée (fréquent avec plusieurs faits),
+    0,8 quand le fait est clair (une relation connue), 0,3 sinon."""
+    value = raw.get("confidence")
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    return 0.8 if raw.get("relation") not in (None, "unknown") or raw.get("type") in ("kill", "group_join", "group_leave", "facing", "confirm") else 0.3
+
+
 def _normalize(raw: dict) -> dict:
     out = {
         "callsign": rules.normalize_callsign(raw.get("callsign")),
@@ -129,14 +151,14 @@ def _normalize(raw: dict) -> dict:
         "enemy_id": _enemy_id(raw.get("enemy_id")),
         "enemy_ids": [e for e in (_enemy_id(x) for x in (raw.get("enemy_ids") or [])) if e][:20],
         "scope": raw.get("scope") if raw.get("scope") in ("listed", "nearest", "around_me", "all") else None,
-        "type": raw.get("type") if raw.get("type") in ("position", "movement", "kill", "group_join", "group_leave", "facing") else "position",
+        "type": raw.get("type") if raw.get("type") in ("position", "movement", "kill", "group_join", "group_leave", "facing", "confirm") else "position",
         "relation": raw.get("relation") if raw.get("relation") in RELATIONS else "unknown",
         "landmark": None,
         "landmarks": [str(x) for x in (raw.get("landmarks") or [])][:2],
         "direction": raw.get("direction") if raw.get("direction") in DIRECTIONS else None,
         "distance_m": raw.get("distance_m") if isinstance(raw.get("distance_m"), (int, float)) else None,
         "clock": int(raw["clock"]) if isinstance(raw.get("clock"), (int, float)) and 1 <= raw["clock"] <= 12 else None,
-        "confidence": float(raw.get("confidence") or 0.0),
+        "confidence": _confidence(raw),
         "source": "mistral",
     }
     lm = raw.get("landmark")
