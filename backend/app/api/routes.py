@@ -1,13 +1,15 @@
 """Routes HTTP et WebSocket. Responsable : B."""
 
+import json
 import re
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
+from .. import sim
 from ..config import settings
 from ..intent.rules import normalize_callsign
-from ..pipeline import UnknownEnemy, kill_enemy, process_report
+from ..pipeline import UnknownEnemy, kill_enemy, leave_group, process_report
 from ..security.signing import SignatureError, verify_request
 from ..speech.stt import TranscriptionError, transcribe
 from ..state import hub, journal, units
@@ -54,6 +56,8 @@ def check_signed(action: str, unit: str, ts: int, nonce: str, signature: str, co
                                  public_key_b64=key, signature_b64=signature)
     except SignatureError as exc:
         raise HTTPException(401, str(exc)) from exc
+    if public_key is None:  # annonce, neutralisation… du terminal qui tient l'unité : il est actif
+        hub.touch(unit)
     return {"signed_message": message, "signature": signature, "public_key": key}
 
 
@@ -64,7 +68,19 @@ def get_config() -> dict:
         "center": [settings.zone_lat, settings.zone_lon],
         "node_mode": settings.node_mode,
         "llm": "mistral" if settings.mistral_api_key else "rules",
+        "sim": sim.enabled,
     }
+
+
+class SimIn(BaseModel):
+    on: bool
+
+
+@router.post("/api/sim")
+async def set_sim(body: SimIn) -> dict:
+    """Active ou coupe la marche autonome des ennemis (démo)."""
+    await sim.set_enabled(body.on)
+    return {"on": sim.enabled}
 
 
 @router.get("/api/units")
@@ -73,16 +89,26 @@ def list_units() -> list[dict]:
 
 
 @router.post("/api/units/claim")
-def claim_unit(body: ClaimIn) -> dict:
+async def claim_unit(body: ClaimIn) -> dict:
     """Le terminal prouve qu'il détient la clé privée en signant sa demande."""
     # La signature porte sur le nom tel que tapé ; on renvoie le nom normalisé
     # (« alpha1 » -> « ALPHA 1 »), que le terminal utilisera ensuite pour signer.
     check_signed("claim", body.unit, body.ts, body.nonce, body.signature,
                  body.public_key.encode("utf-8"), public_key=body.public_key)
     unit = clean_unit(body.unit)
-    if not units.claim(unit, body.public_key):
-        raise HTTPException(409, f"{unit} est déjà tenue par un autre terminal.")
-    return {"unit": unit}
+    if units.claim(unit, body.public_key):
+        hub.touch(unit)
+        await hub.broadcast({"type": "units"})  # nouvelle unité : les cartes rechargent les couleurs
+        return {"unit": unit, "taken_over": False}
+    # Tenue par une autre clé. Si aucun onglet de cette unité n'est connecté (crash, onglet
+    # fermé, autre navigateur), on la reprend ; sinon elle reste protégée.
+    if hub.online(unit):
+        raise HTTPException(409, f"{unit} est utilisée par un terminal connecté en ce moment.")
+    units.transfer(unit, body.public_key)
+    hub.touch(unit)
+    # L'onglet qui tenait l'unité (s'il revient) sait qu'il l'a perdue.
+    await hub.broadcast({"type": "unit_owner", "unit": unit, "public_key": body.public_key})
+    return {"unit": unit, "taken_over": True}
 
 
 @router.post("/api/units/release")
@@ -106,6 +132,21 @@ class KillIn(Signed):
     enemy_id: str = Field(pattern=r"^E\d{1,4}$")
 
 
+@router.get("/api/groups")
+def list_groups() -> dict:
+    return journal.groups()
+
+
+@router.post("/api/groups/leave")
+async def post_leave_group(body: Signed) -> dict:
+    unit = clean_unit(body.unit)
+    signed = check_signed("group_leave", unit, body.ts, body.nonce, body.signature, b"")
+    try:
+        return await leave_group(unit, f"{unit} quitte l'escouade", signed=signed)
+    except UnknownEnemy as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.get("/api/enemies")
 def list_enemies() -> dict:
     return journal.enemies()
@@ -117,7 +158,9 @@ async def post_kill(body: KillIn) -> dict:
     unit = clean_unit(body.unit)
     signed = check_signed("kill", unit, body.ts, body.nonce, body.signature, body.enemy_id.encode("utf-8"))
     try:
-        return await kill_enemy(unit, body.enemy_id, f"{body.enemy_id} neutralisé", signed=signed)
+        ev = await kill_enemy(unit, body.enemy_id, f"{body.enemy_id} neutralisé", signed=signed)
+        ev.pop("killed_at", None)
+        return ev
     except UnknownEnemy as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -173,6 +216,13 @@ async def websocket(ws: WebSocket) -> None:
     await ws.send_json({"type": "snapshot", "events": journal.all()})
     try:
         while True:
-            await ws.receive_text()
+            # Seul message attendu : {"type": "presence", "unit": "ALPHA 1" | null}
+            try:
+                msg = json.loads(await ws.receive_text())
+            except ValueError:
+                continue
+            if isinstance(msg, dict) and msg.get("type") == "presence":
+                u = msg.get("unit")
+                hub.set_presence(ws, u if isinstance(u, str) and units.key_of(u) else None)
     except WebSocketDisconnect:
         hub.disconnect(ws)

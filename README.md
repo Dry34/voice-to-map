@@ -73,6 +73,8 @@ voice-to-map/
 | `POST` | `/api/units/claim` | réserve une unité pour la clé publique du terminal (signé) |
 | `POST` | `/api/units/release` | libère l'unité (signé par son terminal) |
 | `GET` | `/api/units` | unités déjà réservées |
+| `GET` | `/api/groups` | escouades |
+| `POST` | `/api/groups/leave` | quitter son escouade (signé) |
 | `GET` | `/api/enemies` | état des ennemis (vivant, dernière position) |
 | `POST` | `/api/enemies/kill` | neutraliser un ennemi (signé) |
 | `POST` | `/api/reports` | `{unit, text, ts, nonce, signature}` → événement créé |
@@ -87,6 +89,10 @@ voice-to-map/
 - Un terminal = une unité. Au premier lancement, le navigateur crée une paire de clés Ed25519 (clé privée non exportable, gardée dans IndexedDB) et réserve son unité. Chaque annonce est signée : le serveur refuse une annonce pour ALPHA 1 qui ne vient pas du terminal d'ALPHA 1, et un indicatif prononcé différent est ignoré. « Quitter l'unité » retire son point de toutes les cartes. La carte montre toutes les unités, la sienne en avant. « Poste de commandement » : tout voir sans unité. Unité bloquée (clé perdue) : `scripts/release_unit.py "ALPHA 1"`.
 - Ennemis : « Contact, 5 ennemis près de l'Hôtel-Dieu » crée E1…E5, alignés sur la rue la plus proche, regroupés en cluster au dézoom. « E3 au sud du pont » le déplace, « E3 neutralisé » (ou le bouton sur le losange, signé) le grise. « J'ai tué l'ennemi » sans numéro : le plus proche.
 - « Je vais vers Bravo 2 » : l'unité est placée sur la dernière position de BRAVO 2.
+- Plusieurs faits par annonce : « 4 ennemis à Notre-Dame, et moi je suis à Châtelet ». Neutralisations multiples : « E1, E2 et E3 », « les cinq ennemis », « autour de moi », « tous ».
+- Escouades : « Moi et Tom 2, on est en groupe » ; quand l'un bouge, l'escouade suit (6 m d'écart). « Je quitte le groupe » ou le bouton dans l'encart en haut à gauche.
+- Déplacements tracés par les rues (itinéraire piéton OSRM). « Je marche 60 m vers le sud ». Horaire militaire : « ennemi à 6h, 100 m » (12h = sens de marche).
+- Une couleur par unité, attribuée par le serveur. Une unité dont l'onglet a planté peut être reprise après 20 s.
 - Remise à zéro de la carte (unités et ennemis, l'historique reste) : `backend/.venv/bin/python scripts/clear_map.py`.
 
 - Push-to-talk : maintenir le bouton (ou la barre espace), parler, relâcher. L'audio part à Voxtral (`STT_MODEL`, `STT_LANGUAGE=fr`, qui comprend aussi l'anglais), puis suit le même chemin qu'une annonce tapée.

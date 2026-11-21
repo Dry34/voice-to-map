@@ -141,3 +141,45 @@ def test_project_on_line():
     q, bearing = project_on_line((48.8603, 2.342), line)
     assert abs(q[0] - 48.860) < 1e-9 and abs(q[1] - 2.342) < 1e-6
     assert round(bearing) == 90
+
+
+def test_multi_kill_parsing():
+    i = parse("J'ai éliminé ennemi 1, ennemi 2, ennemi 3, ennemi 4.")
+    assert (i["type"], i["scope"], i["enemy_ids"]) == ("kill", "listed", ["E1", "E2", "E3", "E4"])
+    i = parse("Je viens d'exterminer les cinq ennemis.")
+    assert (i["type"], i["scope"], i["count"]) == ("kill", "nearest", 5)
+    assert parse("J'élimine les ennemis autour de moi.")["scope"] == "around_me"
+    assert parse("Tous les ennemis sont neutralisés.")["scope"] == "all"
+
+
+def test_closest_unit_tolerates_transcription():
+    from app.geo.resolver import _closest_unit
+    units = ["TOM 2", "EPSILON", "ALPHA 1"]
+    assert _closest_unit("TOME 2", units) == "TOM 2"
+    assert _closest_unit("TOM 3", units) is None      # numéro différent
+
+
+def test_groups_join_leave(tmp_path):
+    from app.store.journal import Journal
+    j = Journal(tmp_path / "e.db")
+    common = dict(transcript="x", lat=None, lon=None, uncertainty_m=None, resolved_landmark="G1", origin_node="central")
+    j.append(unit="A 1", intent={"type": "group_join", "group_id": "G1", "members": ["A 1", "B 2"]}, status="group", **common)
+    j.append(unit="C 3", intent={"type": "group_join", "group_id": "G1", "members": ["C 3", "A 1"]}, status="group", **common)
+    assert j.groups() == {"G1": ["A 1", "B 2", "C 3"]}
+    j.append(unit="B 2", intent={"type": "group_leave", "group_id": "G1"}, status="group", **common)
+    assert j.groups() == {"G1": ["A 1", "C 3"]}
+    j.append(unit="C 3", intent={"type": "left"}, status="left", **common)  # quitte la carte
+    assert j.groups() == {}  # plus qu'une unité : escouade dissoute
+
+
+def test_military_clock():
+    i = parse("Enemy à 6h00.")
+    assert (i["subject"], i["relation"], i["clock"]) == ("enemy", "offset", 6)
+    i = parse("Contact à 3 heures, 200 mètres.")
+    assert (i["clock"], i["distance_m"]) == (3, 200)
+
+
+def test_bearing_between():
+    from app.geo.geometry import bearing_between
+    assert round(bearing_between((48.85, 2.35), (48.86, 2.35))) == 0
+    assert round(bearing_between((48.85, 2.35), (48.84, 2.35))) == 180
