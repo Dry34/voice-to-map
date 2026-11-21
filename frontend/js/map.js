@@ -312,7 +312,9 @@ function drawArrow(u) {
 }
 
 export function applyEvent(ev, { focus = false } = {}) {
-  if (ev.status === "cleared") { clearAll(); return; }
+  if (ev.status === "cleared") { clearAll(); alertRings.forEach((m) => m.remove()); alertRings.clear(); return; }
+  if (ev.status === "alert") { showAlertRing(ev.unit, ev.lat, ev.lon); return; }
+  if (ev.status === "alert_clear") { clearAlertRing(ev.unit); return; }
   if (ev.status === "facing") {
     const u = units.get(ev.unit) || (unitColor(ev.unit), units.get(ev.unit));
     u.heading = ev.intent?.heading_deg ?? u.heading;
@@ -358,4 +360,30 @@ export function squadBox() {
   ctl.onAdd = () => box;
   ctl.addTo(map);
   return box;
+}
+
+// --- Alertes : cercle rouge qui pulse autour d'une unité qui demande du renfort ----
+
+const alertRings = new Map(); // unité -> marqueur
+
+export function showAlertRing(unit, lat, lon) {
+  const icon = L.divIcon({ className: "sos-ring", html: "<span></span><span></span>", iconSize: [120, 120], iconAnchor: [60, 60] });
+  const existing = alertRings.get(unit);
+  if (existing) existing.setLatLng([lat, lon]);
+  else alertRings.set(unit, L.marker([lat, lon], { icon, interactive: false, keyboard: false, zIndexOffset: -100 }).addTo(map));
+}
+
+export function clearAlertRing(unit) {
+  alertRings.get(unit)?.remove();
+  alertRings.delete(unit);
+}
+
+/** Dernière position affichée d'une unité ([lat, lon]) ou null. */
+export function unitPosition(unit) {
+  const m = units.get(unit)?.marker;
+  return m ? [m.getLatLng().lat, m.getLatLng().lng] : null;
+}
+
+export function flyToPoint(lat, lon) {
+  map.flyTo([lat, lon], 17);
 }
