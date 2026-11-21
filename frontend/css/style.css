@@ -104,6 +104,8 @@ button { cursor: pointer; font: inherit; border-radius: 4px; }
 [hidden] { display: none !important; }
 .unit-label.enemy { background: #e5484d; color: #fff; font-weight: 600; }
 .enemy-icon span { display: block; width: 14px; height: 14px; margin: 2px; background: #e5484d; border: 2px solid #fff; transform: rotate(45deg); box-shadow: 0 0 0 2px rgba(229, 72, 77, .35); }
+.event button.confirm { margin-top: 6px; background: var(--friend); color: #fff; border: 0; padding: 5px 12px; font-weight: 600; }
+.event button.confirm:disabled { opacity: .6; }
 .badge.left { color: var(--muted); border: 1px solid var(--line); }
 .enemy-icon.down span { background: #6b7680; box-shadow: none; }
 .unit-label.enemy.down { background: #6b7680; text-decoration: line-through; }

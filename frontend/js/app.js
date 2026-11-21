@@ -48,6 +48,7 @@ const DICT = {
   "conn": { fr: "Connexion", en: "Connection" },
 };
 const allEvents = []; // pour reconstruire l'historique quand on change de langue
+const confirmedSeqs = new Set(); // annonces « à confirmer » qui ont été confirmées depuis
 const seen = new Set();
 let me = null; // identité de cet onglet : {unit, privateKey, publicKey}
 let announcePresence = () => {}; // branché sur le WebSocket dans main()
@@ -146,12 +147,35 @@ function addToHistory(ev) {
     $("events").appendChild(li);
     return;
   }
+  li.dataset.seq = ev.seq;
+  if (ev.status === "pending_review" && confirmedSeqs.has(ev.seq)) markConfirmed(li);
   li.querySelector(".text").textContent = `« ${ev.transcript} »`;
   li.querySelector(".res").textContent = describe(ev)
+    + (ev.intent?.confirmed_from ? ` · ${tr("confirmée", "confirmed")}` : "")
     + (ev.intent?.callsign_ignored ? tr(` · indicatif « ${ev.intent.callsign} » ignoré`, ` · callsign “${ev.intent.callsign}” ignored`) : "")
     + (ev.intent?.moved_by ? ` · ${tr("déplacé avec", "moved with")} ${ev.intent.moved_by}` : "");
   li.onclick = () => flyTo(ev);
+  // « À confirmer » avec un lieu trouvé, pour sa propre unité : bouton Confirmer.
+  if (ev.status === "pending_review" && ev.lat != null && me && ev.unit === me.unit && !confirmedSeqs.has(ev.seq)) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "confirm";
+    btn.textContent = tr("Confirmer", "Confirm");
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      btn.disabled = true;
+      try { applyAll(await identity.confirmReport(me, ev.seq)); }
+      catch (err) { btn.disabled = false; btn.textContent = err.message; }
+    };
+    li.appendChild(btn);
+  }
   $("events").appendChild(li);
+}
+
+function markConfirmed(li) {
+  const b = li.querySelector(".meta .badge");
+  if (b) { b.className = "badge confirmed"; b.textContent = tr("confirmé", "confirmed"); }
+  li.querySelector("button.confirm")?.remove();
 }
 
 let connected = false;
@@ -160,6 +184,12 @@ function handle(ev, live) {
   if (seen.has(ev.id)) return;
   seen.add(ev.id);
   allEvents.push(ev);
+  const from = ev.intent?.confirmed_from;
+  if (from) {
+    confirmedSeqs.add(from);
+    const li = document.querySelector(`#events li[data-seq="${from}"]`);
+    if (li) markConfirmed(li);
+  }
   if (live && ["group", "left", "cleared"].includes(ev.status)) refreshGroups();
   // On ne recentre la carte que sur sa propre unité (ou sur tout le monde au poste de commandement).
   // Un ennemi signalé recentre tout le monde ; une position, seulement le terminal concerné.
@@ -177,7 +207,9 @@ function applyAll(ev) {
     if (e.status === "facing") return `${e.unit} ${tr("regarde vers", "facing")} ${Math.round(i.heading_deg || 0)}°`;
     if (e.status === "group") return i.type === "group_join" ? `${tr("escouade", "squad")} ${i.group_id}: ${(i.members || []).join(", ")}` : `${tr("quitte", "left")} ${i.group_id}`;
     if (e.status === "enemy_down") return `${(i.kill_ids || [i.enemy_id]).join(", ")} ${tr(i.kill_ids ? "neutralisés" : "neutralisé", "neutralised")}`;
+    if (e.status === "pending_review" && e.lat != null) return tr(`à confirmer : ${e.resolved_landmark} (bouton ou « confirmé »)`, `to confirm: ${e.resolved_landmark} (button or “confirmed”)`);
     if (e.status !== "confirmed") return tr("lieu non trouvé, à confirmer", "place not found, to confirm");
+    if (i.confirmed_from) return `${tr("confirmé", "confirmed")}: ${e.resolved_landmark || "position"}`;
     if (i.subject === "enemy") return `${i.group_ids ? `${i.group_ids.length} ${tr("ennemis", "hostiles")}` : i.enemy_id}: ${e.resolved_landmark}`;
     return e.intent?.moved_by ? `${e.unit} ${tr("aussi", "too")}` : `${tr("placé", "placed")}: ${e.resolved_landmark || "position"}`;
   }).join(" · ");

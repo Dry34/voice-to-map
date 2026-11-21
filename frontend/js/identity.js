@@ -123,3 +123,7 @@ export async function killEnemy(identity, enemyId) {
 export async function leaveGroup(identity) {
   return postJson("/api/groups/leave", await signWith(identity, "group_leave", ""));
 }
+
+export async function confirmReport(identity, seq) {
+  return postJson("/api/reports/confirm", { ...(await signWith(identity, "confirm", String(seq))), seq });
+}
