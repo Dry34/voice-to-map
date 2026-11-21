@@ -40,12 +40,12 @@ voice-to-map/
 │   │   ├── pipeline.py         texte → intention → lieu → événement → diffusion
 │   │   ├── api/routes.py       routes HTTP et WebSocket                [B]
 │   │   ├── store/journal.py    journal SQLite en ajout seul, chaîné SHA-256  [B]
-│   │   ├── speech/stt.py       transcription Voxtral (samedi)          [B]
+│   │   ├── speech/stt.py       transcription Voxtral                   [B]
 │   │   ├── intent/
 │   │   │   ├── extractor.py    Mistral en JSON, repli sur les règles   [C]
 │   │   │   └── rules.py        analyse par règles (EN/FR)              [C]
 │   │   ├── geo/
-│   │   │   ├── osm.py          cache de zone, Overpass, Nominatim      [D]
+│   │   │   ├── osm.py          cache de zone, Overpass, Photon, Nominatim [D]
 │   │   │   ├── resolver.py     intention → point + incertitude         [D]
 │   │   │   └── geometry.py     distances, caps, projections            [D]
 │   │   └── relay/README.md     mode relais (samedi)                    [B]
@@ -56,6 +56,7 @@ voice-to-map/
 │   ├── css/style.css
 │   └── js/
 │       ├── app.js              formulaire, historique, intégrité
+│       ├── ptt.js              push-to-talk (bouton maintenu ou barre espace)
 │       ├── map.js              marqueur, cercle d'incertitude, tracé par unité
 │       └── socket.js           WebSocket avec reconnexion
 ├── scripts/fetch_landmarks.py  extraction des repères OSM de la zone   [D]
@@ -67,12 +68,18 @@ voice-to-map/
 | Méthode | Route | Rôle |
 |---|---|---|
 | `POST` | `/api/reports` | `{"unit": "ALPHA 2", "text": "I am south of the church."}` → événement créé |
+| `POST` | `/api/reports/audio` | formulaire `unit` + fichier `audio` (webm, m4a, ogg, 5 Mo max) → transcription Voxtral puis même traitement |
 | `GET` | `/api/events?unit=` | historique complet ou par unité |
 | `GET` | `/api/integrity` | rejoue la chaîne de hash : `{"ok", "count", "broken_at"}` |
 | `GET` | `/api/config` | zone, mode du nœud, moteur d'analyse |
 | `WS` | `/ws` | `snapshot` à la connexion, puis un message `event` par annonce |
 
-## Ce qui marche ce soir
+## Ce qui marche
+
+- Push-to-talk : maintenir le bouton (ou la barre espace), parler, relâcher. L'audio part à Voxtral (`STT_MODEL`, `STT_LANGUAGE=fr`, qui comprend aussi l'anglais), puis suit le même chemin qu'une annonce tapée.
+- Un indicatif prononcé (« Alpha 1, … ») remplace l'unité choisie dans le formulaire.
+- Analyse avec `voxtral-small-2507` en mode JSON (60 requêtes par minute sur notre clé), repli automatique sur les règles locales en cas d'erreur ou de quota.
+- Géocodage : cache de zone, puis Overpass (coupé 2 min après un échec), puis Photon et Nominatim. Les noms propres sont cherchés jusqu'à 10 km du centre.
 
 - Une annonce tapée est analysée, placée et diffusée en direct à tous les navigateurs ouverts.
 - Relations gérées : `at`, `near`, cardinales (`south_of`…), `towards`, `along`, `intersection`.

@@ -9,10 +9,14 @@ MIN_CONFIDENCE = 0.6
 
 
 async def process_report(unit: str, text: str) -> dict:
+    intent = await extract_intent(text, unit=unit, last_position=journal.last_position(unit))
+
+    # L'indicatif prononcé (« Alpha 1, … ») l'emporte sur l'unité choisie dans le formulaire.
+    if intent.get("callsign"):
+        unit = intent["callsign"]
     last = journal.last_position(unit)
     ref = last or (settings.zone_lat, settings.zone_lon)
 
-    intent = await extract_intent(text, unit=unit, last_position=last)
     place = await resolve(intent, ref=ref, last=last)
 
     confirmed = place is not None and intent.get("confidence", 0) >= MIN_CONFIDENCE
