@@ -100,7 +100,7 @@ voice-to-map/
 - Flèche de direction par unité (sens de marche, « je regarde à 3h »). Navigation relative : « je suis la route et tourne à droite au prochain bloc ». Ennemis « sur le chemin » répartis le long du trajet.
 - Page d'accueil, interface en français et en anglais (drapeau), mode clair et sombre (soleil / lune). Liens directs : `?lang=en`, `?theme=dark`.
 - La remise à zéro vide aussi l'historique affiché ; « Effacer (local) » ne vide que son propre écran.
-- Renfort : « à l'aide », « besoin de renfort » (ou le bouton rouge) prévient les unités à moins de 1,5 km : bandeau « ALPHA 1 a besoin de vous », distance, bip, « J'y vais ». « Situation sécurisée » termine l'alerte. « Je pars tout seul » quitte l'escouade ; un déplacement d'escouade tient sur une ligne d'historique.
+- Renfort : « à l'aide », « besoin de renfort » (ou le bouton rouge) prévient les unités à moins de 3 km : bandeau « ALPHA 1 a besoin de vous », distance, bips et annonce vocale, « J'y vais ». « Situation sécurisée » termine l'alerte. « Je pars tout seul » quitte l'escouade ; un déplacement d'escouade tient sur une ligne d'historique.
 - Annonce « à confirmer » avec un lieu trouvé : bouton « Confirmer », ou « confirmé » à la voix. Les unités s'arrêtent toujours sur la rue (jamais dans un bâtiment). Ennemi vu sans distance : 50 m devant, dans la rue.
 - Remise à zéro de la carte (unités et ennemis, l'historique reste) : `backend/.venv/bin/python scripts/clear_map.py`.
 

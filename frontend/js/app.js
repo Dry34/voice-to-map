@@ -110,7 +110,7 @@ function addToHistory(ev) {
     li.querySelector(".text").textContent = `« ${ev.transcript} »`;
     const who = (i.recipients || []).map((r) => `${r.unit} (${r.distance_m} m)`).join(", ");
     li.querySelector(".res").textContent = ev.status === "alert"
-      ? (who ? `${tr("prévenus", "notified")} : ${who}` : tr("aucune unité à moins de 1,5 km", "no unit within 1.5 km"))
+      ? (who ? `${tr("prévenus", "notified")} : ${who}` : tr("aucune unité à moins de 3 km", "no unit within 3 km"))
         + (i.reason ? ` · ${i.reason}` : "")
       : tr("fin de l'alerte", "alert over");
     if (ev.lat != null) li.onclick = () => flyToPoint(ev.lat, ev.lon);
@@ -192,18 +192,86 @@ function addToHistory(ev) {
   $("events").appendChild(li);
 }
 
+// --- Boîte de confirmation aux couleurs du site -----------------------------
+
+/** Demande une confirmation ; renvoie true si l'utilisateur valide. */
+function ask({ title, text, ok, danger = false }) {
+  const dlg = $("ask");
+  $("ask-title").textContent = title;
+  $("ask-text").textContent = text;
+  $("ask-ok").textContent = ok;
+  $("ask-cancel").textContent = tr("Annuler", "Cancel");
+  dlg.classList.toggle("danger", danger);
+  return new Promise((resolve) => {
+    dlg.addEventListener("close", () => resolve(dlg.returnValue === "ok"), { once: true });
+    dlg.returnValue = "";
+    dlg.showModal();
+    $("ask-ok").focus();
+  });
+}
+
 // --- Alerte de détresse -----------------------------------------------------
 
 let bannerFor = null;
+let audioCtx = null;
+
+// Les navigateurs bloquent le son tant qu'on n'a pas touché la page : on prépare le son au
+// premier clic ou appui de touche, pour que le bip d'alerte passe ensuite.
+let speechReady = false;
+
+function unlockAudio() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch { /* pas de son disponible */ }
+  if (!speechReady && window.speechSynthesis) {
+    // Une phrase vide au premier geste : certains navigateurs exigent un geste avant de parler.
+    speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+    speechReady = true;
+  }
+}
+
+/** Meilleure voix disponible pour la langue (les voix « Google », « Premium » ou « Enhanced » sont plus nettes). */
+function bestVoice(lang) {
+  const voices = speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith(lang));
+  const score = (v) => (/premium|enhanced|amélioré|google|neural|natural/i.test(v.name) ? 2 : 0) + (v.localService ? 0 : 1);
+  return voices.sort((a, b) => score(b) - score(a))[0] || null;
+}
+
+/** Annonce vocale, volume maximal, débit lent, phrase par phrase avec une pause entre chaque. */
+function say(sentences) {
+  if (!window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  const lang = currentLang() === "en" ? "en" : "fr";
+  const voice = bestVoice(lang);
+  for (const text of sentences) {
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang === "en" ? "en-US" : "fr-FR";
+    if (voice) u.voice = voice;
+    u.volume = 1;   // le maximum de la synthèse ; au-delà, c'est le volume de l'appareil
+    u.rate = 0.85;  // plus lent = plus distinct
+    u.pitch = 1;
+    speechSynthesis.speak(u);
+  }
+}
+
+/** Nom à annoncer : l'escouade de l'unité si elle en a une (« Escouade G1, ALPHA 1 »), sinon l'unité. */
+function teamName(unit) {
+  const entry = Object.entries(groups).find(([, ms]) => ms.includes(unit));
+  return entry ? tr(`Escouade ${entry[0]}, ${unit}`, `Squad ${entry[0]}, ${unit}`) : unit;
+}
+["pointerdown", "keydown", "touchstart"].forEach((t) => window.addEventListener(t, unlockAudio, { passive: true }));
 
 function beep() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    unlockAudio();
+    const ctx = audioCtx;
     [0, 0.25, 0.5].forEach((t) => {
       const o = ctx.createOscillator();
       const g = ctx.createGain();
-      o.frequency.value = 880;
-      g.gain.setValueAtTime(0.25, ctx.currentTime + t);
+      o.type = "square";      // plus perçant qu'une sinusoïde
+      o.frequency.value = 960;
+      g.gain.setValueAtTime(0.8, ctx.currentTime + t);
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.18);
       o.connect(g).connect(ctx.destination);
       o.start(ctx.currentTime + t);
@@ -231,8 +299,10 @@ function whereFromMe(ev) {
 
 function showBanner(ev) {
   bannerFor = ev.unit;
-  $("alert-title").textContent = tr(`${ev.unit} a besoin de vous`, `${ev.unit} needs you`);
-  $("alert-where").textContent = [whereFromMe(ev), ev.intent?.reason].filter(Boolean).join(" · ");
+  const name = teamName(ev.unit);
+  const where = whereFromMe(ev);
+  $("alert-title").textContent = tr(`${name} a besoin de vous`, `${name} needs you`);
+  $("alert-where").textContent = [where, ev.intent?.reason].filter(Boolean).join(" · ");
   $("alert-go").textContent = tr("J'y vais", "On my way");
   $("alert-see").textContent = tr("Voir sur la carte", "Show on map");
   $("alert-close").textContent = tr("Fermer", "Dismiss");
@@ -246,6 +316,15 @@ function showBanner(ev) {
   };
   $("alert-banner").hidden = false;
   beep();
+  // Après les bips : l'annonce à voix haute.
+  // Après les bips : l'annonce à voix haute, phrases courtes, le nom répété pour être sûr de l'entendre.
+  setTimeout(() => say([
+    tr("Alerte renfort.", "Backup alert."),
+    tr(`${name} a besoin de vous.`, `${name} needs you.`),
+    ...(where ? [where.replace(/^à /, tr("À ", "")) + "."] : []),
+    ...(ev.intent?.reason ? [`${ev.intent.reason}.`] : []),
+    tr(`Je répète : ${name} a besoin de vous.`, `I repeat: ${name} needs you.`),
+  ]), 1100);
 }
 
 function hideBanner() {
@@ -450,13 +529,19 @@ async function main() {
   $("pc-mode").onclick = () => { pcMode.set(true); render(); };
   $("leave").onclick = () => { identity.leave(); me = null; pcMode.set(false); render(); };
   $("release").onclick = async () => {
-    if (!me || !confirm(tr(`Quitter ${me.unit} ? Son point disparaît de la carte et un autre terminal pourra la prendre.`, `Leave ${me.unit}? Its point disappears from the map and another terminal can take it.`))) return;
+    if (!me || !(await ask({
+      title: tr(`Quitter ${me.unit} ?`, `Leave ${me.unit}?`),
+      text: tr("Son point disparaît de la carte et un autre terminal pourra la prendre.",
+               "Its point disappears from the map and another terminal can take it."),
+      ok: tr("Quitter l'unité", "Leave the unit"),
+    }))) return;
     try {
       await identity.release(me);
       me = null;
       render();
     } catch (err) {
-      alert(`${tr("Impossible de libérer", "Could not release")}: ${err.message}`);
+      $("claim-msg").className = "msg err";
+      $("claim-msg").textContent = `${tr("Impossible de libérer", "Could not release")} : ${err.message}`;
     }
   };
 
@@ -535,7 +620,13 @@ async function main() {
   simListener = showSim;
 
   $("sos").onclick = async () => {
-    if (!me || !confirm(tr("Envoyer une demande de renfort aux unités proches ?", "Send a backup request to nearby units?"))) return;
+    if (!me || !(await ask({
+      title: tr("Demander du renfort ?", "Request backup?"),
+      text: tr("Toutes les unités à moins de 3 km recevront une alerte avec votre position.",
+               "Every unit within 3 km will get an alert with your position."),
+      ok: tr("Envoyer l'alerte", "Send the alert"),
+      danger: true,
+    }))) return;
     try { applyAll(await identity.raiseAlert(me)); }
     catch (err) { $("form-msg").className = "msg err"; $("form-msg").textContent = err.message; }
   };
