@@ -17,6 +17,7 @@ CARDINAL_OFFSET_M = 120
 NAMED_PLACE_RADIUS_M = 10_000   # Paris intra-muros et proche banlieue
 REGION_RADIUS_M = 60_000        # Île-de-France (Disneyland, Versailles…)
 DEFAULT_ALONG_M = 100
+FAMOUS_IMPORTANCE = 0.45        # notoriété Nominatim au-delà de laquelle un lieu est « connu de tous »
 
 
 def _place(pt: Point, relation: str, label: str | None, osm_id: str | None = None) -> dict:
@@ -35,7 +36,30 @@ def _unit_position(name: str) -> tuple[Point, str] | None:
         pos = journal.last_position(unit)
         if pos:
             return pos, unit
+    # Transcription approximative (« tome 2 » pour TOM 2) : unité de la carte au nom proche,
+    # avec exactement le même numéro.
+    best = _closest_unit(raw, journal.units_on_map())
+    if best:
+        return journal.last_position(best), best
     return None
+
+
+def _closest_unit(raw: str, units: list[str]) -> str | None:
+    import difflib
+
+    def split(u: str) -> tuple[str, str]:
+        return re.sub(r"[^A-Z]", "", u), re.sub(r"\D", "", u)
+
+    letters, digits = split(raw)
+    scored = []
+    for u in units:
+        ul, ud = split(u)
+        if ud != digits or not letters or not ul:
+            continue
+        score = difflib.SequenceMatcher(None, letters, ul).ratio()
+        if score >= 0.7:
+            scored.append((score, u))
+    return max(scored)[1] if scored else None
 
 
 async def locate_landmark(landmark: dict, ref: Point) -> tuple[Point, str, str | None] | None:
@@ -51,6 +75,11 @@ async def locate_landmark(landmark: dict, ref: Point) -> tuple[Point, str, str |
             return None
 
     if kind == "street":
+        # Une voie célèbre (« les Champs-Élysées ») l'emporte sur une petite rue homonyme près de l'unité
+        # (il y a une rue des Champs-Élysées à Gentilly).
+        famous = await osm.nominatim_named(name, (settings.zone_lat, settings.zone_lon), NAMED_PLACE_RADIUS_M)
+        if famous and famous.get("importance", 0) >= FAMOUS_IMPORTANCE:
+            return (famous["lat"], famous["lon"]), famous["name"], famous["osm_id"]
         street = await osm.find_street(name, ref, radius)
         if street:
             label, lines = street
@@ -93,11 +122,14 @@ async def _resolve_around(intent: dict, ref: Point, last: Point | None) -> dict 
 
     if relation in ("along", "offset"):
         # along : « je remonte la rue vers le nord sur 200 m » ; offset : « ennemi à 300 m au nord-est de moi ».
-        bearing = DIRECTION_BEARINGS.get(intent.get("direction") or "")
+        bearing = intent.get("bearing_deg")
+        if bearing is None:
+            bearing = DIRECTION_BEARINGS.get(intent.get("direction") or "")
         if last is None or bearing is None:
             return None
         dist = intent.get("distance_m") or DEFAULT_ALONG_M
-        label = (intent.get("landmark") or {}).get("name") or (f"{int(dist)} m {intent['direction']}" if relation == "offset" else None)
+        where = f"à {intent['clock']}h" if intent.get("clock") else intent.get("direction") or ""
+        label = (intent.get("landmark") or {}).get("name") or (f"{int(dist)} m {where}".strip() if relation == "offset" else None)
         return _place(destination(last, bearing, dist), relation, label)
 
     if relation == "intersection":

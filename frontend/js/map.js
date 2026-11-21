@@ -1,6 +1,7 @@
 // Carte Leaflet : un marqueur, un cercle d'incertitude et un tracé par unité. Responsable : A.
 
-const COLORS = ["#f07a45", "#7fb0de", "#6cc08f", "#e0b04e", "#c58fe0", "#e06c8f"];
+const COLORS = ["#4c9aff", "#3fb950", "#a371f7", "#e3b341", "#39c5cf", "#f778ba",
+  "#9be564", "#79c0ff", "#c297ff", "#2ea0a0", "#db61a2", "#d4d4d4"];
 const units = new Map();
 let map;
 let own = null; // unité gérée par ce terminal, mise en avant
@@ -34,7 +35,9 @@ export function setOwnUnit(unit) {
 let enemyLayer;
 
 export function initMap(center) {
-  map = L.map("map", { maxZoom: 19 }).setView(center, 15); // maxZoom exigé par le regroupement des ennemis
+  // maxZoom exigé par le regroupement des ennemis ; zoom en bas à droite (l'escouade est en haut à gauche).
+  map = L.map("map", { maxZoom: 19, zoomControl: false }).setView(center, 15);
+  L.control.zoom({ position: "bottomright" }).addTo(map);
   enemyLayer = L.markerClusterGroup({
     maxClusterRadius: 45,
     showCoverageOnHover: false,
@@ -51,13 +54,62 @@ export function initMap(center) {
   return map;
 }
 
+const assigned = new Map(); // couleurs données par le serveur à chaque unité réservée
+
+function fallbackColor(unit) {
+  // Unité qui n'est plus réservée (historique) : couleur stable tirée de son nom.
+  let h = 0;
+  for (const c of unit) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return COLORS[h % COLORS.length];
+}
+
 export function unitColor(unit) {
   if (!units.has(unit)) {
-    const color = COLORS[units.size % COLORS.length];
-    units.set(unit, { color, marker: null, circle: null, path: null, points: [] });
+    units.set(unit, { color: assigned.get(unit) || fallbackColor(unit), marker: null, circle: null, path: null, points: [] });
   }
   return units.get(unit).color;
 }
+
+/** Couleurs du serveur [{unit, color}] : chaque personne a la sienne, la même sur tous les écrans. */
+export function setUnitColors(list) {
+  for (const { unit, color } of list) {
+    if (!color) continue;
+    assigned.set(unit, color);
+    const u = units.get(unit);
+    if (!u || u.color === color) continue;
+    u.color = color;
+    if (u.circle) u.circle.setStyle({ color });
+    if (u.path) u.path.setStyle({ color });
+    restyle(unit, u);
+  }
+}
+
+// --- Itinéraires : un déplacement suit les rues (intent.route) au lieu d'un trait droit ---
+
+function routeOf(ev) {
+  const r = ev.intent?.route;
+  return Array.isArray(r) && r.length >= 2 ? r : null;
+}
+
+function meters(a, b) {
+  const k = Math.cos((a[0] * Math.PI) / 180);
+  return Math.hypot((b[0] - a[0]) * 111_320, (b[1] - a[1]) * 111_320 * k);
+}
+
+/** Point situé à `dist` mètres du départ le long de l'itinéraire. */
+function along(route, dist) {
+  for (let i = 1; i < route.length; i++) {
+    const seg = meters(route[i - 1], route[i]);
+    if (dist <= seg) {
+      const t = seg ? dist / seg : 0;
+      return [route[i - 1][0] + t * (route[i][0] - route[i - 1][0]), route[i - 1][1] + t * (route[i][1] - route[i - 1][1])];
+    }
+    dist -= seg;
+  }
+  return route[route.length - 1];
+}
+
+const routeLength = (route) => route.slice(1).reduce((sum, p, i) => sum + meters(route[i], p), 0);
 
 // --- Ennemis : un losange rouge par ennemi (E1, E2…), qui pâlit avec le temps -------
 // Un nouveau signalement du même ennemi le déplace ; « neutralisé » le grise et le barre.
@@ -140,23 +192,77 @@ function addEnemy(ev, focus) {
     e = { ev, marker, circle, path, points: [pos], down: false };
     enemies.set(id, e);
   } else {
+    finishAnim(e);
     e.ev = ev;
-    e.points.push(pos);
-    // Le regroupement ne suit pas un marqueur déplacé : on le retire puis on le remet.
-    enemyLayer.removeLayer(e.marker);
-    e.marker.setLatLng(pos);
-    enemyLayer.addLayer(e.marker);
+    const route = routeOf(ev);
     if (e.circle) e.circle.setLatLng(pos).setRadius(ev.uncertainty_m || 60);
-    e.path.setLatLngs(e.points);
+    if (ev.intent?.sim && route) {
+      // Étape simulée : on ne connaît pas la destination d'un ennemi. La carte ne montre que le
+      // chemin déjà parcouru, qui s'allonge derrière le losange (même position sur tous les écrans).
+      e.anim = { route, total: routeLength(route), start: new Date(ev.ts).getTime(), speed: ev.intent.speed_mps || 2 };
+      stepAnim(e);
+    } else {
+      e.points.push(...(route ? route.slice(1) : [pos]));
+      e.path.setLatLngs(e.points);
+      moveEnemyMarker(e, pos);
+    }
   }
   refreshEnemy(id);
-  if (focus) map.panTo(pos);
+  if (focus && !ev.intent?.sim) map.panTo(pos);
 }
+
+function animPosition(a) {
+  const dist = ((Date.now() - a.start) / 1000) * a.speed;
+  return dist >= a.total ? a.route[a.route.length - 1] : along(a.route, Math.max(0, dist));
+}
+
+/** Morceau de l'itinéraire déjà parcouru (jusqu'à la position actuelle). */
+function travelled(a) {
+  let left = Math.max(0, ((Date.now() - a.start) / 1000) * a.speed);
+  const out = [a.route[0]];
+  for (let i = 1; i < a.route.length; i++) {
+    const seg = meters(a.route[i - 1], a.route[i]);
+    if (left < seg) { out.push(along(a.route.slice(i - 1, i + 1), left)); return out; }
+    left -= seg;
+    out.push(a.route[i]);
+  }
+  return out;
+}
+
+const TRAIL_MAX = 300; // on garde la fin de la trace, pas tout l'historique
+
+function stepAnim(e) {
+  const done = travelled(e.anim);
+  e.path.setLatLngs(e.points.concat(done.slice(1)).slice(-TRAIL_MAX));
+  moveEnemyMarker(e, done[done.length - 1]);
+  if (Date.now() - e.anim.start >= (e.anim.total / e.anim.speed) * 1000) finishAnim(e);
+}
+
+/** Étape terminée (ou interrompue) : le chemin parcouru devient de la trace. */
+function finishAnim(e) {
+  if (!e.anim) return;
+  const done = travelled(e.anim);
+  e.points = e.points.concat(done.slice(1)).slice(-TRAIL_MAX);
+  e.path.setLatLngs(e.points);
+  moveEnemyMarker(e, done[done.length - 1]);
+  e.anim = null;
+}
+
+function moveEnemyMarker(e, pos) {
+  // Le regroupement ne suit pas un marqueur déplacé : on le retire puis on le remet.
+  const clustered = !e.down;
+  if (clustered) enemyLayer.removeLayer(e.marker);
+  e.marker.setLatLng(pos);
+  if (clustered) enemyLayer.addLayer(e.marker);
+}
+
+setInterval(() => enemies.forEach((e) => { if (e.anim && !e.down) stepAnim(e); }), 1000);
 
 function killEnemy(ev) {
   const id = ev.intent?.enemy_id;
   const e = enemies.get(id);
   if (!e) return;
+  finishAnim(e); // neutralisé en route : il s'arrête là où il est
   e.down = true;
   e.downBy = ev.unit;
   // Neutralisé : sort du regroupement (le chiffre du cluster ne compte que les vivants), reste affiché en gris.
@@ -193,7 +299,8 @@ export function applyEvent(ev, { focus = false } = {}) {
 
   const u = units.get(ev.unit);
   const pos = [ev.lat, ev.lon];
-  u.points.push(pos);
+  const route = routeOf(ev);
+  u.points.push(...(route && u.points.length ? route.slice(1) : [pos]));
 
   if (!u.marker) {
     u.circle = L.circle(pos, { radius: ev.uncertainty_m || 50, color: u.color, weight: 1, dashArray: "4 4", fillOpacity: 0.12 }).addTo(map);
@@ -210,4 +317,15 @@ export function applyEvent(ev, { focus = false } = {}) {
 
 export function flyTo(ev) {
   if (ev.lat != null) map.flyTo([ev.lat, ev.lon], 17);
+}
+
+/** Encart en haut à gauche de la carte (escouade). Renvoie l'élément à remplir. */
+export function squadBox() {
+  const box = L.DomUtil.create("div", "squad-box");
+  box.hidden = true;
+  L.DomEvent.disableClickPropagation(box);
+  const ctl = L.control({ position: "topleft" });
+  ctl.onAdd = () => box;
+  ctl.addTo(map);
+  return box;
 }

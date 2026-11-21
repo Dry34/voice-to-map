@@ -233,16 +233,21 @@ async def nominatim_named(query: str, center: Point, radius_m: float) -> dict | 
     if key in _cache:
         return _cache[key]
     lon_min, lat_min, lon_max, lat_max = _box(center, radius_m)
-    results = await _nominatim_search({"q": query, "limit": 8, "bounded": 1,
+    results = await _nominatim_search({"q": query, "limit": 8, "bounded": 1, "namedetails": 1,
                                        "viewbox": f"{lon_min},{lat_max},{lon_max},{lat_min}"})
     if results is None:
         return None
     hit = None
     for res in results:
         name = res.get("name") or res.get("display_name", "").split(",")[0]
-        if name_matches(query, name) or name_matches(query, ", ".join(res.get("display_name", "").split(",")[:2])):
+        # Tous les noms du lieu (nom d'usage, ancien nom…) et le début de son adresse :
+        # « Beaubourg » -> Centre Georges Pompidou, 19 rue Beaubourg.
+        names = [name, ", ".join(res.get("display_name", "").split(",")[:3]),
+                 *(v for v in (res.get("namedetails") or {}).values() if isinstance(v, str))]
+        if any(name_matches(query, n) for n in names):
             hit = {"name": name or query, "lat": float(res["lat"]), "lon": float(res["lon"]),
-                   "osm_id": f"{res.get('osm_type')}/{res.get('osm_id')}"}
+                   "osm_id": f"{res.get('osm_type')}/{res.get('osm_id')}",
+                   "importance": float(res.get("importance") or 0)}
             break
     _cache[key] = hit
     return hit

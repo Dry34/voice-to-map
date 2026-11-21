@@ -90,3 +90,12 @@ def project_on_line(p: Point, line: list[Point]) -> tuple[Point, float]:
             best, best_d = q, d
             best_bearing = (math.degrees(math.atan2(dx, dy)) + 360) % 360
     return best, best_bearing
+
+
+def bearing_between(a: Point, b: Point) -> float:
+    """Cap (degrés, 0 = nord) pour aller de a à b."""
+    lat1, lat2 = math.radians(a[0]), math.radians(b[0])
+    dlon = math.radians(b[1] - a[1])
+    x = math.sin(dlon) * math.cos(lat2)
+    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
