@@ -13,10 +13,15 @@ import json
 import sqlite3
 import threading
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
 GENESIS = "0" * 64
+
+# Annonce envoyée en différé (gardée hors ligne) : heure d'origine à utiliser pour les événements
+# créés pendant son traitement, qui sont aussi marqués « delayed ».
+late_ts: ContextVar[str | None] = ContextVar("late_ts", default=None)
 
 # Champs couverts par le hash, dans cet ordre.
 HASHED = [
@@ -98,10 +103,13 @@ class Journal:
         ts: str | None = None,
         signed: dict | None = None,
     ) -> dict:
+        delayed = late_ts.get()
+        if delayed and intent is not None:
+            intent = {**intent, "delayed": True}
         row = {
             "id": str(uuid.uuid4()),
             "unit": unit,
-            "ts": ts or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "ts": ts or delayed or datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "transcript": transcript,
             "intent_json": json.dumps(intent, ensure_ascii=False, sort_keys=True) if intent is not None else None,
             # Colonnes REAL : on force des flottants pour que le hash soit identique une fois relu.
@@ -257,6 +265,9 @@ class Journal:
         """Événements depuis la dernière remise à zéro (elle comprise) : ce que montrent les cartes."""
         rows = self._conn.execute("SELECT * FROM events WHERE seq >= ? ORDER BY seq", (self.last_clear(),))
         return [_to_event(r) for r in rows]
+
+    def has_signed(self, message: str) -> bool:
+        return self._conn.execute("SELECT 1 FROM events WHERE signed_message = ? LIMIT 1", (message,)).fetchone() is not None
 
     def get(self, seq: int) -> dict | None:
         row = self._conn.execute("SELECT * FROM events WHERE seq = ?", (seq,)).fetchone()

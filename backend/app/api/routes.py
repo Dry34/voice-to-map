@@ -2,6 +2,7 @@
 
 import json
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -14,6 +15,7 @@ from ..pipeline import (UnknownEnemy, clear_alert, confirm_pending, kill_enemy, 
 from ..security.signing import SignatureError, verify_request
 from ..speech.stt import TranscriptionError, transcribe
 from ..state import hub, journal, units
+from ..store.journal import late_ts
 
 MAX_AUDIO_BYTES = 5 * 1024 * 1024  # ~ plusieurs minutes d'audio compressé, largement assez
 
@@ -36,6 +38,7 @@ class Signed(BaseModel):
     ts: int
     nonce: str = Field(min_length=8, max_length=64)
     signature: str = Field(min_length=1, max_length=200)
+    queued: bool = False  # action gardée hors ligne par le terminal, envoyée au retour du réseau
 
 
 class ClaimIn(Signed):
@@ -47,18 +50,21 @@ class ReportIn(Signed):
 
 
 def check_signed(action: str, unit: str, ts: int, nonce: str, signature: str, content: bytes,
-                 public_key: str | None = None) -> dict:
+                 public_key: str | None = None, late: bool = False) -> dict:
     """Vérifie que la requête vient du terminal qui tient l'unité. Renvoie les champs à journaliser."""
     key = public_key or units.key_of(unit)
     if key is None:
         raise HTTPException(403, f"{unit} n'est réservée par aucun terminal.")
     try:
         message = verify_request(action=action, unit=unit, ts_ms=ts, nonce=nonce, content=content,
-                                 public_key_b64=key, signature_b64=signature)
+                                 public_key_b64=key, signature_b64=signature, late=late,
+                                 already_used=journal.has_signed)
     except SignatureError as exc:
         raise HTTPException(401, str(exc)) from exc
     if public_key is None:  # annonce, neutralisation… du terminal qui tient l'unité : il est actif
         hub.touch(unit)
+    if late:  # action en différé : les événements créés gardent l'heure où elle a été faite
+        late_ts.set(datetime.fromtimestamp(ts / 1000, timezone.utc).isoformat(timespec="seconds"))
     return {"signed_message": message, "signature": signature, "public_key": key}
 
 
@@ -120,7 +126,7 @@ async def release_unit(body: Signed) -> dict:
     en retirant le marqueur et le tracé de l'unité.
     """
     unit = clean_unit(body.unit)
-    signed = check_signed("release", unit, body.ts, body.nonce, body.signature, b"")
+    signed = check_signed("release", unit, body.ts, body.nonce, body.signature, b"", late=body.queued)
     units.release(unit)
     event = journal.append(unit=unit, transcript=None, intent={"type": "left", "subject": "self"},
                            lat=None, lon=None, uncertainty_m=None, resolved_landmark=None,
@@ -141,7 +147,7 @@ class ConfirmIn(Signed):
 async def post_confirm(body: ConfirmIn) -> dict:
     """Bouton « Confirmer » sur une annonce à confirmer (signé par le terminal de l'unité)."""
     unit = clean_unit(body.unit)
-    signed = check_signed("confirm", unit, body.ts, body.nonce, body.signature, str(body.seq).encode("utf-8"))
+    signed = check_signed("confirm", unit, body.ts, body.nonce, body.signature, str(body.seq).encode("utf-8"), late=body.queued)
     try:
         return await confirm_pending(unit, body.seq, f"{unit} confirme l'annonce #{body.seq}", signed=signed)
     except UnknownEnemy as exc:
@@ -152,7 +158,7 @@ async def post_confirm(body: ConfirmIn) -> dict:
 async def post_alert(body: Signed) -> dict:
     """Bouton « Demander du renfort » (signé) : prévient les unités proches."""
     unit = clean_unit(body.unit)
-    signed = check_signed("sos", unit, body.ts, body.nonce, body.signature, b"")
+    signed = check_signed("sos", unit, body.ts, body.nonce, body.signature, b"", late=body.queued)
     try:
         return await raise_alert(unit, f"{unit} demande du renfort", signed=signed)
     except UnknownEnemy as exc:
@@ -162,7 +168,7 @@ async def post_alert(body: Signed) -> dict:
 @router.post("/api/alerts/clear")
 async def post_alert_clear(body: Signed) -> dict:
     unit = clean_unit(body.unit)
-    signed = check_signed("sos_clear", unit, body.ts, body.nonce, body.signature, b"")
+    signed = check_signed("sos_clear", unit, body.ts, body.nonce, body.signature, b"", late=body.queued)
     return await clear_alert(unit, f"{unit} : situation sécurisée", signed=signed)
 
 
@@ -174,7 +180,7 @@ def list_groups() -> dict:
 @router.post("/api/groups/leave")
 async def post_leave_group(body: Signed) -> dict:
     unit = clean_unit(body.unit)
-    signed = check_signed("group_leave", unit, body.ts, body.nonce, body.signature, b"")
+    signed = check_signed("group_leave", unit, body.ts, body.nonce, body.signature, b"", late=body.queued)
     try:
         return await leave_group(unit, f"{unit} quitte l'escouade", signed=signed)
     except UnknownEnemy as exc:
@@ -190,7 +196,7 @@ def list_enemies() -> dict:
 async def post_kill(body: KillIn) -> dict:
     """Bouton « Neutraliser » sur un ennemi : signé par le terminal qui le déclare."""
     unit = clean_unit(body.unit)
-    signed = check_signed("kill", unit, body.ts, body.nonce, body.signature, body.enemy_id.encode("utf-8"))
+    signed = check_signed("kill", unit, body.ts, body.nonce, body.signature, body.enemy_id.encode("utf-8"), late=body.queued)
     try:
         ev = await kill_enemy(unit, body.enemy_id, f"{body.enemy_id} neutralisé", signed=signed)
         ev.pop("killed_at", None)
@@ -199,24 +205,29 @@ async def post_kill(body: KillIn) -> dict:
         raise HTTPException(409, str(exc)) from exc
 
 
-async def _process(unit: str, text: str, signed: dict) -> dict:
+async def _process(unit: str, text: str, signed: dict, late_ms: int | None = None) -> dict:
+    token = late_ts.set(datetime.fromtimestamp(late_ms / 1000, timezone.utc).isoformat(timespec="seconds")) if late_ms else None
     try:
         return await process_report(unit, text, signed=signed)
     except UnknownEnemy as exc:
         raise HTTPException(409, str(exc)) from exc
+    finally:
+        if token:
+            late_ts.reset(token)
 
 
 @router.post("/api/reports")
 async def post_report(report: ReportIn) -> dict:
     unit = clean_unit(report.unit)
-    signed = check_signed("report", unit, report.ts, report.nonce, report.signature, report.text.encode("utf-8"))
-    return await _process(unit, report.text.strip(), signed)
+    signed = check_signed("report", unit, report.ts, report.nonce, report.signature, report.text.encode("utf-8"),
+                          late=report.queued)
+    return await _process(unit, report.text.strip(), signed, report.ts if report.queued else None)
 
 
 @router.post("/api/reports/audio")
 async def post_audio_report(
     unit: str = Form(...), ts: int = Form(...), nonce: str = Form(...), signature: str = Form(...),
-    audio: UploadFile = File(...),
+    audio: UploadFile = File(...), queued: bool = Form(False),
 ) -> dict:
     data = await audio.read()
     if not data:
@@ -224,14 +235,14 @@ async def post_audio_report(
     if len(data) > MAX_AUDIO_BYTES:
         raise HTTPException(413, "Enregistrement trop long.")
     unit = clean_unit(unit)
-    signed = check_signed("audio", unit, ts, nonce, signature, data)
+    signed = check_signed("audio", unit, ts, nonce, signature, data, late=queued)
     try:
         text = await transcribe(data, audio.filename or "annonce.webm", audio.content_type or "audio/webm")
     except TranscriptionError as exc:
         raise HTTPException(502, str(exc)) from exc
     if not text:
         raise HTTPException(422, "Rien n'a été compris dans l'enregistrement.")
-    return await _process(unit, text[:500], signed)
+    return await _process(unit, text[:500], signed, ts if queued else None)
 
 
 @router.get("/api/events")
