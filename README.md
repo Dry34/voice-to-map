@@ -132,3 +132,62 @@ Toutes les variables sont dans `.env` (modèle : `.env.example`). **Ne jamais co
 | `ZONE_RADIUS_M` | `2000` | rayon de recherche des repères génériques (« l'église », « la pharmacie ») |
 
 Après une modification de `.env`, relancez le serveur.
+
+---
+
+## Utilisation
+
+1. **Prendre une unité.** Sur la carte, tapez un nom (`ALPHA 1`, `TOM 2`…) puis **Prendre**. Le navigateur crée sa clé : ce terminal est désormais le seul à pouvoir parler pour cette unité. **Poste de commandement** permet de tout voir sans unité.
+2. **Parler.** Maintenez **Maintenir pour parler** (ou la barre espace), parlez, relâchez. On peut aussi écrire l'annonce.
+3. **Suivre.** Toutes les unités, les ennemis et l'historique se mettent à jour en direct sur tous les écrans.
+
+Exemples d'annonces (en français ou en anglais) :
+
+| On dit | La carte |
+|---|---|
+| « Je suis au sud de l'église. » | place l'unité 120 m au sud de l'église la plus proche |
+| « Je me dirige rue de Turbigo puis aux Arts et Métiers. » | trajet par les rues, étape par étape |
+| « Je suis la route et je tourne à droite au prochain bloc. » | un pâté de maisons devant, puis à droite |
+| « Je marche 60 m vers le sud. » / « Je recule. » | déplacement relatif, demi-tour |
+| « Contact, cinq ennemis près de l'Hôtel-Dieu. » | E1 à E5, alignés dans la rue la plus proche |
+| « Ennemi à 6h, 100 mètres. » | derrière l'unité (12h = sens de marche) |
+| « E3 neutralisé. » / « J'élimine les ennemis autour de moi. » | ennemis grisés |
+| « Moi et Tom 2, on est en groupe. » | escouade qui se déplace ensemble |
+| « Je pars tout seul. » | quitte l'escouade |
+| « Je regarde à 3h. » | la flèche tourne de 90° |
+| « À l'aide, on est pris à partie ! » | alerte aux unités à moins de 3 km |
+| « Confirmé. » | valide la dernière annonce « à confirmer » |
+
+---
+
+## Commandes utiles
+
+Depuis la racine du projet (sous Windows, remplacez `backend/.venv/bin/python` par `backend\.venv\Scripts\python`).
+
+| Commande | Effet |
+|---|---|
+| `./scripts/start.sh` | lance le serveur (`--tunnel` pour le lien public, `PORT=8001` pour un autre port) |
+| `backend/.venv/bin/python scripts/clear_map.py` | remet la carte à zéro : plus d'unités, d'ennemis ni d'escouades ; l'historique affiché repart de zéro (le journal complet est conservé) |
+| `backend/.venv/bin/python scripts/release_unit.py --list` | liste les unités réservées |
+| `backend/.venv/bin/python scripts/release_unit.py "ALPHA 1"` | libère une unité bloquée (navigateur effacé, autre appareil) |
+| `backend/.venv/bin/python scripts/fetch_landmarks.py` | met en cache les repères de la zone (plus rapide, utile hors ligne) |
+| `cd backend && .venv/bin/python -m pytest -q` | lance les tests |
+| `kill $(lsof -tiTCP:8000 -sTCP:LISTEN)` | arrête un serveur resté ouvert sur le port 8000 |
+| `curl localhost:8000/api/integrity` | vérifie la chaîne du journal et les signatures |
+
+---
+
+## Dépannage
+
+| Symptôme | Cause et solution |
+|---|---|
+| « Le port 8000 est déjà utilisé » | un serveur tourne déjà : `kill $(lsof -tiTCP:8000 -sTCP:LISTEN)`, ou `PORT=8001 ./scripts/start.sh` |
+| Erreur Cloudflare 530 sur le lien public | l'ordinateur qui fait tourner le serveur a perdu internet ou s'est mis en veille. Le tunnel se reconnecte tout seul ; sinon relancez-le (nouvelle adresse) |
+| Le micro ne marche pas sur un autre appareil | il faut HTTPS : utilisez le lien du tunnel, pas l'adresse `http://192.168…` |
+| « Ce navigateur ne gère pas les signatures Ed25519 » | mettez à jour le navigateur (Chrome 137+, Safari 17+, Firefox 129+) |
+| « … est utilisée par un terminal connecté » | l'unité est ouverte dans un autre onglet. Fermez-le, ou attendez 20 s après sa fermeture |
+| Une annonce reste « à confirmer » | lieu introuvable ou phrase ambiguë : bouton **Confirmer** si un lieu a été trouvé, sinon redites-la plus précisément |
+| Pas de son à l'alerte | cliquez une fois dans la page (les navigateurs bloquent le son avant), vérifiez le volume, et que l'unité est à moins de 3 km |
+| La page ne change pas après une mise à jour | rechargement forcé : Cmd+Shift+R (Mac) ou Ctrl+Shift+R |
+| Erreurs « Overpass indisponible » dans le terminal | le service OSM public est saturé ; le serveur bascule tout seul sur Photon et Nominatim |
+| Analyse en mode `rules` (affiché dans l'en-tête) | pas de clé Mistral, ou quota atteint : vérifiez `MISTRAL_API_KEY` |
